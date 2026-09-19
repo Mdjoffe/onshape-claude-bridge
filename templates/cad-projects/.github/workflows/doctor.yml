@@ -1,0 +1,45 @@
+name: Onshape doctor
+
+# Verifies that the repository's Onshape API credentials actually work.
+# Run it from the Actions tab: Onshape doctor -> Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      bridge_ref:
+        description: 'Branch or tag of onshape-claude-bridge to install'
+        default: main
+        type: string
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the bridge
+        env:
+          BRIDGE_REF: ${{ inputs.bridge_ref }}
+        run: pip install "git+https://github.com/Mdjoffe/onshape-claude-bridge.git@${BRIDGE_REF}"
+
+      - name: Check the credentials are set
+        env:
+          ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
+          ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
+        run: |
+          missing=''
+          [ -z "$ONSHAPE_ACCESS_KEY" ] && missing="${missing} ONSHAPE_ACCESS_KEY"
+          [ -z "$ONSHAPE_SECRET_KEY" ] && missing="${missing} ONSHAPE_SECRET_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):${missing}. Add them under"\
+                 "Settings > Secrets and variables > Actions, then re-run."
+            exit 1
+          fi
+          echo 'Both secrets are present. Checking them against Onshape...'
+
+      - name: Check the API key against Onshape
+        env:
+          ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
+          ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
+        run: onshape-bridge doctor

@@ -64,49 +64,59 @@ jobs:
       - name: Work out which projects changed
         id: scope
         if: steps.creds.outputs.present == 'true'
+        env:
+          PROJECT_INPUT: ${{ inputs.project }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.project }}" ]; then
-            echo "paths=${{ inputs.project }}" >> "$GITHUB_OUTPUT"
+          if [ -n "$PROJECT_INPUT" ]; then
+            printf 'paths=%s\n' "$PROJECT_INPUT" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo 'paths=.' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          base='${{ github.event.pull_request.base.sha || github.event.before }}'
+          base="$BASE_SHA"
           # A brand new branch reports an all-zeros "before"; sync everything then.
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             echo 'paths=.' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Map each changed file back to the project directory that owns it.
-          changed=$(git diff --name-only "$base" "${{ github.sha }}" -- lib projects \
+          changed=$(git diff --name-only "$base" "$HEAD_SHA" -- lib projects \
             | while read -r f; do
                 d=$(dirname "$f")
                 while [ "$d" != "." ] && [ ! -f "$d/onshape.yml" ]; do d=$(dirname "$d"); done
-                [ -f "$d/onshape.yml" ] && echo "$d"
+                # A changed file belonging to no project just drops out here.
+                if [ -f "$d/onshape.yml" ]; then echo "$d"; fi
               done | sort -u | tr '\n' ' ')
           echo "paths=${changed}" >> "$GITHUB_OUTPUT"
 
       - name: Validate configs
         if: steps.creds.outputs.present == 'true' && steps.scope.outputs.paths != ''
+        env:
+          SYNC_PATHS: ${{ steps.scope.outputs.paths }}
         run: |
-          for p in ${{ steps.scope.outputs.paths }}; do onshape-bridge validate "$p"; done
+          for p in $SYNC_PATHS; do onshape-bridge validate "$p"; done
 
       - name: Sync
         if: steps.creds.outputs.present == 'true' && steps.scope.outputs.paths != ''
         env:
           ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
           ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
+          SYNC_PATHS: ${{ steps.scope.outputs.paths }}
+          DIRECTION: ${{ inputs.direction || 'push' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          direction='${{ inputs.direction || 'push' }}'
           # A pull request only ever reports; it must not write to Onshape.
           dry=''
-          if [ "${{ github.event_name }}" = "pull_request" ]; then dry='--dry-run'; fi
-          for p in ${{ steps.scope.outputs.paths }}; do
-            onshape-bridge "$direction" "$p" $dry
+          if [ "$EVENT_NAME" = "pull_request" ]; then dry='--dry-run'; fi
+          for p in $SYNC_PATHS; do
+            onshape-bridge "$DIRECTION" "$p" $dry
           done
 
       - name: Commit exports

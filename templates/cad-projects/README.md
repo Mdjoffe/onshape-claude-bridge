@@ -35,11 +35,16 @@ you are willing to have CI overwrite in Onshape.
 
 ## Setup
 
-1. Create an API key pair at <https://cad.onshape.com/appstore/dev-portal> → **API keys**.
-2. Add them here as repository secrets `ONSHAPE_ACCESS_KEY` and `ONSHAPE_SECRET_KEY`
-   (Settings → Secrets and variables → Actions).
-3. Locally: `pip install git+https://github.com/Mdjoffe/onshape-claude-bridge.git`
-   then `onshape-bridge doctor` to confirm the keys work.
+1. Create an API key pair at <https://cad.onshape.com/appstore/dev-portal> →
+   **API keys**. Tick read *and* write on documents; the secret is shown once.
+2. Add both as repository secrets `ONSHAPE_ACCESS_KEY` and `ONSHAPE_SECRET_KEY`,
+   under Settings → Secrets and variables → Actions.
+3. Confirm they work: Actions → **Onshape doctor** → Run workflow. It prints the
+   authenticated account, or says why Onshape rejected the keys. Nothing else in
+   this repo works until that run is green.
+
+Prefer a shell? `pip install git+https://github.com/Mdjoffe/onshape-claude-bridge.git`
+then `onshape-bridge doctor` runs the same check locally.
 
 ## Starting a project
 
@@ -60,6 +65,13 @@ onshape-bridge push projects/my-thing --dry-run
 - **pull request** → dry run only; a PR can never mutate an Onshape document
 - **push to main** → pushes changed projects' FeatureScript into Onshape
 - **manual run** → push or pull, one project or all; `pull` commits exports back
+
+With the secrets absent it skips with a notice instead of failing, so an
+unconfigured repo stays green.
+
+`.github/workflows/doctor.yml` is manual-only and checks the credentials. Its
+`bridge_ref` input selects which branch of the bridge to install, so you can test
+an unmerged bridge change before it lands on `main`.
 
 ## Exports and repo size
 
