@@ -1,0 +1,26 @@
+# Copy this directory to start a project. Find the ids by opening the document
+# in Onshape -- the URL is .../documents/<document id>/w/<workspace id>/e/<...> --
+# then run `onshape-bridge elements projects/<name>` for the element ids.
+project: example-project
+document:
+  id: REPLACE_WITH_DOCUMENT_ID
+  workspace: REPLACE_WITH_WORKSPACE_ID
+
+# git is the source of truth for these: CI overwrites Onshape on merge.
+feature_studios:
+  - source: featurescript/example.fs
+    element: REPLACE_WITH_FEATURE_STUDIO_ELEMENT_ID
+
+# Onshape is the source of truth for these: CI writes the files into the repo.
+exports:
+  - element: REPLACE_WITH_PART_STUDIO_ELEMENT_ID
+    kind: partstudios
+    format: STEP
+    output: exports/example.step
+  - element: REPLACE_WITH_PART_STUDIO_ELEMENT_ID
+    kind: partstudios
+    format: STL
+    output: exports/example.stl
+    options:
+      mode: binary
+      units: millimeter

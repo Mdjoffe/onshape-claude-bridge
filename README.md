@@ -98,3 +98,10 @@ then `import` that version from the projects that consume it.
 ```sh
 python -m pytest
 ```
+
+## Content repo template
+
+`templates/cad-projects/` is a ready-to-use scaffold for the companion content
+repo: layout, `onshape.yml` examples, LFS-staged `.gitattributes`, and a
+path-filtered GitHub Actions workflow that dry-runs on pull requests and pushes
+on merge. Copy it into a new empty repo to start.

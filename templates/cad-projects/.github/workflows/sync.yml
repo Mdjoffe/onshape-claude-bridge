@@ -1,0 +1,105 @@
+name: Onshape sync
+
+# push to main  -> push changed FeatureScript into Onshape
+# pull request  -> dry run only, so a PR can never mutate a document
+# manual        -> push or pull, one project or all
+on:
+  push:
+    branches: [main]
+    paths: ['lib/**', 'projects/**']
+  pull_request:
+    paths: ['lib/**', 'projects/**']
+  workflow_dispatch:
+    inputs:
+      direction:
+        description: 'push (git -> Onshape) or pull (Onshape -> git)'
+        default: push
+        type: choice
+        options: [push, pull]
+      project:
+        description: 'Path to one project, or blank for every project'
+        default: ''
+        type: string
+
+# Never let two runs write the same document at once.
+concurrency:
+  group: onshape-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # needed only so `pull` can commit exports back
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # full history: the diff base must be present locally
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the bridge
+        run: pip install "git+https://github.com/Mdjoffe/onshape-claude-bridge.git@main"
+
+      - name: Work out which projects changed
+        id: scope
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.project }}" ]; then
+            echo "paths=${{ inputs.project }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "paths=." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Map changed files back to the project directory that owns them.
+          base='${{ github.event.pull_request.base.sha || github.event.before }}'
+          # A brand new branch reports an all-zeros "before"; sync everything then.
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "paths=." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$base" "${{ github.sha }}" -- lib projects \
+            | while read -r f; do
+                d=$(dirname "$f")
+                while [ "$d" != "." ] && [ ! -f "$d/onshape.yml" ]; do d=$(dirname "$d"); done
+                [ -f "$d/onshape.yml" ] && echo "$d"
+              done | sort -u | tr '\n' ' ')
+          echo "paths=${changed}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate configs
+        run: |
+          for p in ${{ steps.scope.outputs.paths }}; do onshape-bridge validate "$p"; done
+        if: steps.scope.outputs.paths != ''
+
+      - name: Sync
+        if: steps.scope.outputs.paths != ''
+        env:
+          ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
+          ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          direction='${{ inputs.direction || 'push' }}'
+          # A pull request only ever reports; it must not write to Onshape.
+          dry=''
+          if [ "${{ github.event_name }}" = "pull_request" ]; then dry='--dry-run'; fi
+          for p in ${{ steps.scope.outputs.paths }}; do
+            onshape-bridge "$direction" "$p" $dry
+          done
+
+      - name: Commit exports
+        if: inputs.direction == 'pull' && github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m 'Update Onshape exports'
+            git push
+          else
+            echo 'exports already up to date'
+          fi

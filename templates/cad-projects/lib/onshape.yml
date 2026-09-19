@@ -1,0 +1,14 @@
+# Shared FeatureScript library.
+#
+# FeatureScript imports resolve against Onshape document *versions*, not file
+# paths, so the library is its own Onshape document and its own project here.
+# Workflow: edit -> merge to main (CI pushes it) -> cut a version in Onshape ->
+# bump the `import` version in the projects that consume it.
+project: lib
+document:
+  id: REPLACE_WITH_LIBRARY_DOCUMENT_ID
+  workspace: REPLACE_WITH_WORKSPACE_ID
+
+feature_studios:
+  - source: featurescript/common.fs
+    element: REPLACE_WITH_FEATURE_STUDIO_ELEMENT_ID
