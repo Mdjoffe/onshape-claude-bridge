@@ -83,6 +83,15 @@ over tessellation. The client follows that redirect itself rather than letting
 the redirect leaves Onshape's host, since storage URLs carry their own
 authorization.
 
+`list_documents` searches an account and follows `next` until the results run
+out, bounded by `max_pages` so a search that matches more than expected stops
+rather than emptying the year's allowance a page at a time. Each page is one
+call and holds at most 20 documents.
+
+`create_version` freezes a workspace under a name. Naming it after the commit
+that produced it is what ties Onshape's history to git's, for the geometry git
+cannot hold.
+
 Configurations are read with `get_configuration`, written with
 `update_configuration`, and turned into the strings other calls want by
 `encode_configuration`. `configuration_options()` exists for one trap: each

@@ -215,6 +215,84 @@ class OnshapeClient:
     def document(self, document_id: str) -> dict:
         return self.get_json(f"/documents/{document_id}")
 
+    def create_document(self, name: str, **attributes: Any) -> dict:
+        """Create a document. The response carries the new id."""
+        return self.post_json("/documents", {"name": name, **attributes})
+
+    def update_document(self, document_id: str, **attributes: Any) -> dict:
+        """Change a document's own attributes, such as `name` or `description`."""
+        return self.post_json(f"/documents/{document_id}", attributes)
+
+    def list_documents(
+        self,
+        q: str | None = None,
+        document_filter: int = 0,
+        owner: str | None = None,
+        owner_type: int | None = None,
+        sort_column: str = "createdAt",
+        sort_order: str = "desc",
+        limit: int = 20,
+        max_pages: int = 10,
+    ) -> list[dict]:
+        """Search documents, following `next` until the results run out.
+
+        `document_filter` selects the set, mirroring the Onshape UI's own search
+        options: 0 my documents, 1 created, 2 shared, 3 trash, 4 public,
+        5 recent, 6 by owner, 7 by company, 9 by team. Filters cannot be
+        combined server-side -- ask for one and narrow the rest in Python.
+
+        `owner_type` is only sent when given. Onshape's default is 1, meaning
+        Company, so a search by *user* id must pass 0 explicitly or quietly
+        match nothing.
+
+        `max_pages` bounds the spend. Each page is a metered call, and a search
+        that matches more than expected should stop rather than empty the
+        year's allowance a page at a time.
+        """
+        params: dict[str, Any] = {
+            "filter": document_filter,
+            "sortColumn": sort_column,
+            "sortOrder": sort_order,
+            "offset": 0,
+            "limit": limit,
+        }
+        if q:
+            params["q"] = q
+        if owner:
+            params["owner"] = owner
+        if owner_type is not None:
+            params["ownerType"] = owner_type
+
+        found: list[dict] = []
+        target: str = "/documents"
+        query: dict[str, Any] | None = params
+        # max_pages bounds calls, not pages kept: every page fetched is used,
+        # so stopping early never means having paid for a discarded one.
+        for _ in range(max_pages):
+            page = self.get_json(target, params=query)
+            found.extend(page.get("items") or [])
+            following = page.get("next")
+            if not following:
+                break
+            # `next` is a complete URL and already carries the query.
+            target, query = following, None
+        return found
+
+    def document_versions(self, document_id: str) -> list[dict]:
+        return self.get_json(f"/documents/d/{document_id}/versions")
+
+    def create_version(self, document_id: str, workspace_id: str, name: str) -> dict:
+        """Freeze a workspace as a named version.
+
+        The document id goes in the path and again in the body; Onshape wants
+        both. Naming the version after the commit that produced it is what ties
+        Onshape's history to git's, for the geometry git cannot hold.
+        """
+        return self.post_json(
+            f"/documents/d/{document_id}/versions",
+            {"documentId": document_id, "workspaceId": workspace_id, "name": name},
+        )
+
     def elements(self, document_id: str, workspace_id: str) -> list[dict]:
         return self.get_json(f"/documents/d/{document_id}/w/{workspace_id}/elements")
 

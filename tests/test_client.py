@@ -545,3 +545,85 @@ def test_an_unconfigured_export_sends_no_configuration(monkeypatch):
     client.export_part_studio_stl(ElementRef("D", "W", "E"))
 
     assert "configuration" not in recorder.calls[0]["params"]
+
+
+def paged(*pages):
+    """Responses for a paginated search: each page but the last names a next."""
+    made = []
+    for index, items in enumerate(pages):
+        following = f"https://cad.onshape.com/api/documents?offset={index + 1}"
+
+        class Page(FakeResponse):
+            payload = {"items": items, "next": following if index + 1 < len(pages) else None}
+
+            def json(self):
+                return self.payload
+
+        made.append(Page())
+    return made
+
+
+def test_listing_documents_follows_next_until_it_runs_out(monkeypatch):
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder(paged([{"id": "a"}, {"id": "b"}], [{"id": "c"}]))
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    found = client.list_documents()
+
+    assert [d["id"] for d in found] == ["a", "b", "c"]
+    assert client.call_count == 2, "one call per page"
+    assert recorder.calls[1]["url"].startswith("https://cad.onshape.com/api/documents?offset=1")
+
+
+def test_listing_documents_stops_at_max_pages(monkeypatch):
+    """A search matching more than expected must not empty the year page by page."""
+    client = OnshapeClient("access", "secret")
+
+    class Endless(FakeResponse):
+        def json(self):
+            return {"items": [{"id": "x"}], "next": "https://cad.onshape.com/api/documents?p=1"}
+
+    monkeypatch.setattr(client._session, "request", lambda *a, **k: Endless())
+
+    found = client.list_documents(max_pages=3)
+
+    assert len(found) == 3
+    assert client.call_count == 3
+
+
+def test_owner_type_is_only_sent_when_given(monkeypatch):
+    """Onshape defaults it to 1 (Company); a user search must say 0 itself."""
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([next(iter(paged([])))])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.list_documents(owner="u1")
+
+    assert "ownerType" not in recorder.calls[0]["params"]
+    assert recorder.calls[0]["params"]["owner"] == "u1"
+    assert recorder.calls[0]["params"]["filter"] == 0
+
+
+def test_a_company_search_sends_both(monkeypatch):
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([next(iter(paged([])))])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.list_documents(q="Onshape API Guide", document_filter=7, owner="c1", owner_type=1)
+
+    params = recorder.calls[0]["params"]
+    assert (params["filter"], params["owner"], params["ownerType"]) == (7, "c1", 1)
+    assert params["q"] == "Onshape API Guide"
+
+
+def test_creating_a_version_repeats_the_document_id(monkeypatch):
+    """Onshape wants it in the path and in the body."""
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.create_version("D", "W", "commit 9ee2cd6")
+
+    sent = recorder.calls[0]
+    assert sent["url"].endswith("/documents/d/D/versions")
+    assert sent["json"] == {"documentId": "D", "workspaceId": "W", "name": "commit 9ee2cd6"}
