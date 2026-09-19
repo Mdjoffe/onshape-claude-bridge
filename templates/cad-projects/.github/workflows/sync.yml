@@ -1,12 +1,13 @@
 name: Onshape sync
 
-# push to main  -> push changed FeatureScript into Onshape
-# pull request  -> dry run only, so a PR can never mutate a document
-# manual        -> push or pull, one project or all
+# Deliberately NOT triggered by pushes to main.
+#
+# The Free plan meters roughly 2500 API calls per user per year, about seven a
+# day. Syncing on every push spends calls asking whether anything changed; at a
+# few pushes a week that is a large fraction of the year's allowance consumed by
+# polling. So the sync runs when you ask for it, and pull requests get a
+# config check that costs nothing.
 on:
-  push:
-    branches: [main]
-    paths: ['lib/**', 'projects/**']
   pull_request:
     paths: ['lib/**', 'projects/**']
   workflow_dispatch:
@@ -17,32 +18,43 @@ on:
         type: choice
         options: [push, pull]
       project:
-        description: 'Path to one project, or blank for every project'
+        description: 'Path to one project (e.g. projects/test-bracket). Blank = all.'
         default: ''
         type: string
+      assume_changed:
+        description: 'Skip the comparison read: 1 call per file instead of 2'
+        default: false
+        type: boolean
 
-# Never let two runs write the same document at once.
 concurrency:
   group: onshape-sync
   cancel-in-progress: false
 
 jobs:
+  # Costs nothing: parses every onshape.yml without touching the network.
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install "git+https://github.com/Mdjoffe/onshape-claude-bridge.git@main"
+      - run: onshape-bridge validate .
+
   sync:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write        # needed only so `pull` can commit exports back
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0     # full history: the diff base must be present locally
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # Without credentials there is nothing this workflow can usefully do, so
-      # report why and finish green rather than failing every run until the
-      # secrets exist.
       - name: Check for credentials
         id: creds
         env:
@@ -56,74 +68,37 @@ jobs:
             echo '::notice::ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY are not set, so the sync was skipped. Add them under Settings > Secrets and variables > Actions.'
           fi
 
-      # Requires the bridge to be merged to main in onshape-claude-bridge.
       - name: Install the bridge
         if: steps.creds.outputs.present == 'true'
         run: pip install "git+https://github.com/Mdjoffe/onshape-claude-bridge.git@main"
 
-      - name: Work out which projects changed
-        id: scope
+      # Free: catches a broken config before any call is spent on it.
+      - name: Validate configs
         if: steps.creds.outputs.present == 'true'
         env:
-          PROJECT_INPUT: ${{ inputs.project }}
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          if [ -n "$PROJECT_INPUT" ]; then
-            printf 'paths=%s\n' "$PROJECT_INPUT" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo 'paths=.' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          base="$BASE_SHA"
-          # A brand new branch reports an all-zeros "before"; sync everything then.
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            echo 'paths=.' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Map each changed file back to the project directory that owns it.
-          changed=$(git diff --name-only "$base" "$HEAD_SHA" -- lib projects \
-            | while read -r f; do
-                d=$(dirname "$f")
-                while [ "$d" != "." ] && [ ! -f "$d/onshape.yml" ]; do d=$(dirname "$d"); done
-                # A changed file belonging to no project just drops out here.
-                if [ -f "$d/onshape.yml" ]; then echo "$d"; fi
-              done | sort -u | tr '\n' ' ')
-          echo "paths=${changed}" >> "$GITHUB_OUTPUT"
-
-      - name: Validate configs
-        if: steps.creds.outputs.present == 'true' && steps.scope.outputs.paths != ''
-        env:
-          SYNC_PATHS: ${{ steps.scope.outputs.paths }}
-        run: |
-          for p in $SYNC_PATHS; do onshape-bridge validate "$p"; done
+          TARGET: ${{ inputs.project }}
+        run: onshape-bridge validate "${TARGET:-.}"
 
       - name: Sync
-        if: steps.creds.outputs.present == 'true' && steps.scope.outputs.paths != ''
+        if: steps.creds.outputs.present == 'true'
         env:
           ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
           ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
-          SYNC_PATHS: ${{ steps.scope.outputs.paths }}
-          DIRECTION: ${{ inputs.direction || 'push' }}
-          EVENT_NAME: ${{ github.event_name }}
+          TARGET: ${{ inputs.project }}
+          DIRECTION: ${{ inputs.direction }}
+          ASSUME_CHANGED: ${{ inputs.assume_changed }}
         run: |
           set -euo pipefail
-          # A pull request only ever reports; it must not write to Onshape.
-          dry=''
-          if [ "$EVENT_NAME" = "pull_request" ]; then dry='--dry-run'; fi
-          for p in $SYNC_PATHS; do
-            onshape-bridge "$DIRECTION" "$p" $dry
-          done
+          extra=''
+          if [ "$DIRECTION" = 'push' ] && [ "$ASSUME_CHANGED" = 'true' ]; then
+            extra='--assume-changed'
+          fi
+          # The run's final line reports how many calls it spent -- copy it into
+          # API_BUDGET.md so the ledger stays honest.
+          onshape-bridge "$DIRECTION" "${TARGET:-.}" $extra
 
       - name: Commit exports
-        if: |
-          steps.creds.outputs.present == 'true'
-          && inputs.direction == 'pull'
-          && github.event_name == 'workflow_dispatch'
+        if: steps.creds.outputs.present == 'true' && inputs.direction == 'pull'
         run: |
           set -euo pipefail
           git config user.name  'github-actions[bot]'

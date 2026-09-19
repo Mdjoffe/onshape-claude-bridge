@@ -60,18 +60,43 @@ onshape-bridge push projects/my-thing --dry-run
 
 ## CI
 
-`.github/workflows/sync.yml`:
+The Onshape Free plan meters roughly **2500 API calls per user per year** —
+about seven a day — so this repo spends them deliberately. See `API_BUDGET.md`
+for the running ledger.
 
-- **pull request** → dry run only; a PR can never mutate an Onshape document
-- **push to main** → pushes changed projects' FeatureScript into Onshape
-- **manual run** → push or pull, one project or all; `pull` commits exports back
+`.github/workflows/sync.yml` has two jobs:
 
-With the secrets absent it skips with a notice instead of failing, so an
-unconfigured repo stays green.
+- **pull request** → `validate` only. Parses every `onshape.yml` without
+  touching the network, so it costs nothing and still catches a broken config.
+- **manual run** → `sync`. Choose direction (`push`/`pull`), optionally one
+  project, and whether to skip the comparison read. `pull` commits exports back.
+
+There is deliberately **no push trigger**. Syncing on every commit would spend
+around four calls a run asking whether anything changed; at a few pushes a week
+that is a large slice of the annual allowance consumed by polling.
 
 `.github/workflows/doctor.yml` is manual-only and checks the credentials. It is
-stdlib-only and installs nothing, so that a failure there means Onshape rejected
-the keys rather than something upstream having gone wrong.
+stdlib-only and installs nothing, so a failure there means Onshape rejected the
+keys rather than something upstream having broken. Costs 1 call.
+
+### What a run costs
+
+| Operation | Calls |
+| --- | --- |
+| Unconfigured project (placeholder ids) | 0 |
+| `validate` | 0 |
+| Push, unchanged | 1 |
+| Push, changed | 2 |
+| Push with **assume changed** | 1 |
+| `doctor` | 1 |
+| Export (`pull`) | 2 + one per poll |
+
+Every run prints `Onshape API calls this run: N` as its last line — copy it into
+`API_BUDGET.md`.
+
+**Exports are the expensive path.** Polling backs off (2s, 4s, 8s … capped at
+30s), so a five-minute export costs about a dozen calls rather than 150. Still
+worth running deliberately rather than on a schedule.
 
 ## Exports and repo size
 

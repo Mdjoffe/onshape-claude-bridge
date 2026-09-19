@@ -55,6 +55,18 @@ Both sync directions compare before writing: identical content reports
 `unchanged` and makes no API call, so re-running in CI creates no Onshape
 microversions and no empty git diffs.
 
+Every run reports `Onshape API calls this run: N` as its last line. The Onshape
+Free plan meters roughly 2500 calls per user per year, so the commands are built
+to spend as few as possible and to say how many they spent.
+
+`push --assume-changed` skips the comparison read and uploads unconditionally:
+1 call per file instead of 2. Use it when git already established the file
+changed -- a manual sync you triggered because you edited something. The cost of
+being wrong is one needless Onshape microversion.
+
+Export polling backs off (2s, 4s, 8s ... capped at 30s) rather than hammering a
+flat interval, which takes a five-minute export from about 150 calls to a dozen.
+
 A project whose ids are still the scaffold's `REPLACE_WITH_...` placeholders
 reports `unconfigured` and is skipped without contacting Onshape. That is what
 lets you point one project at a real document while the rest of the repo stays
