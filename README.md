@@ -60,23 +60,23 @@ microversions and no empty git diffs.
 One `onshape.yml` per project directory, in the content repo:
 
 ```yaml
-project: sv08-toolchanger-dock
+project: test-bracket
 document:
   id: 1a2b3c...          # from the /documents/<id>/w/<id> part of the URL
   workspace: 4d5e6f...
 
 feature_studios:          # git is the source of truth for these
-  - source: featurescript/dock_profile.fs
+  - source: featurescript/bracket.fs
     element: 7g8h9i...
 
 exports:                  # Onshape is the source of truth for these
   - element: 0j1k2l...
     kind: partstudios     # partstudios | assemblies | drawings | blobelements
     format: STEP
-    output: exports/dock.step
+    output: exports/bracket.step
   - element: 0j1k2l...
     format: STL
-    output: exports/dock.stl
+    output: exports/bracket.stl
     options:
       mode: binary
       units: millimeter

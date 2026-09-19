@@ -7,6 +7,7 @@ CAD projects that sync against Onshape through
 
 ```
 lib/                      shared FeatureScript, its own Onshape document
+projects/test-bracket/    throwaway project for verifying the sync works
 projects/<name>/
   onshape.yml             repo paths -> Onshape document/workspace/element ids
   featurescript/*.fs      git is the source of truth; CI pushes these
@@ -42,8 +43,12 @@ you are willing to have CI overwrite in Onshape.
 
 ## Starting a project
 
+`projects/test-bracket/` is a throwaway parametric bracket wired up for exactly
+this — use it to confirm the sync works before trusting the bridge with a design
+you care about. Its README walks the round trip.
+
 ```sh
-cp -r projects/example-project projects/my-thing
+cp -r projects/test-bracket projects/my-thing
 onshape-bridge elements projects/my-thing   # after filling in the document ids
 onshape-bridge push projects/my-thing --dry-run
 ```

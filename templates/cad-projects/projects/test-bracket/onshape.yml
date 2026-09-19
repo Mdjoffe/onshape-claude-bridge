@@ -1,0 +1,33 @@
+# Test project: a parametric L-bracket, deliberately unrelated to any real
+# design. Its job is to prove the round trip works before you trust the bridge
+# with something you care about.
+#
+# Filling this in:
+#   1. Make a new Onshape document with a Feature Studio and a Part Studio.
+#   2. The URL is .../documents/<document id>/w/<workspace id>/e/<element id>
+#      -- copy the first two here.
+#   3. Run `onshape-bridge elements projects/test-bracket` for the element ids.
+project: test-bracket
+document:
+  id: REPLACE_WITH_DOCUMENT_ID
+  workspace: REPLACE_WITH_WORKSPACE_ID
+
+# git is the source of truth: CI overwrites Onshape on merge to main.
+feature_studios:
+  - source: featurescript/bracket.fs
+    element: REPLACE_WITH_FEATURE_STUDIO_ELEMENT_ID
+
+# Onshape is the source of truth: CI writes these files into the repo.
+# Leave commented out until the Part Studio actually has geometry in it.
+# exports:
+#   - element: REPLACE_WITH_PART_STUDIO_ELEMENT_ID
+#     kind: partstudios
+#     format: STEP
+#     output: exports/bracket.step
+#   - element: REPLACE_WITH_PART_STUDIO_ELEMENT_ID
+#     kind: partstudios
+#     format: STL
+#     output: exports/bracket.stl
+#     options:
+#       mode: binary
+#       units: millimeter
