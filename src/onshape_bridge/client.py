@@ -253,6 +253,63 @@ class OnshapeClient:
             payload.update(extra)
         return self.post_json(f"/{element_kind}/{ref.path_suffix}/translations", payload)
 
+    # -- metadata ---------------------------------------------------------
+    #
+    # The second thing in Onshape that is text, after FeatureScript: names,
+    # part numbers, descriptions and custom properties. Text diffs, merges and
+    # costs nothing to store, so unlike geometry it can live in git.
+    #
+    # Every write needs a propertyId, and the only documented way to learn one
+    # is to read the metadata and match on `name`. That makes a naive write two
+    # calls. The ids look stable across documents, so reading once and caching
+    # the map in the repo turns later writes back into one call each.
+
+    @staticmethod
+    def property_ids(metadata: dict, editable_only: bool = True) -> dict[str, str]:
+        """Map property name -> propertyId, for caching rather than re-reading.
+
+        Computed and read-only properties are dropped by default: they cannot
+        be written, so offering them would only invite a rejected call.
+        """
+        return {
+            prop["name"]: prop["propertyId"]
+            for prop in metadata.get("properties") or []
+            if prop.get("name") and prop.get("propertyId")
+            and (not editable_only or prop.get("editable"))
+        }
+
+    def element_metadata(self, ref: ElementRef) -> dict:
+        """Metadata for one tab, including its name."""
+        return self.get_json(f"/metadata/{ref.path_suffix}")
+
+    def update_element_metadata(self, ref: ElementRef, properties: dict[str, str]) -> dict:
+        """Write element properties, keyed by propertyId rather than name.
+
+        Keyed by id because that is what the API takes, and because resolving a
+        name costs a read. Use `property_ids` once to build the mapping.
+        """
+        return self.post_json(
+            f"/metadata/{ref.path_suffix}",
+            {"properties": [{"propertyId": k, "value": v} for k, v in properties.items()]},
+        )
+
+    def part_metadata(self, ref: ElementRef, part_id: str) -> dict:
+        return self.get_json(f"/metadata/{ref.path_suffix}/p/{part_id}")
+
+    def update_part_metadata(
+        self, ref: ElementRef, part_id: str, properties: dict[str, str]
+    ) -> dict:
+        return self.post_json(
+            f"/metadata/{ref.path_suffix}/p/{part_id}",
+            {
+                "jsonType": "metadata-part",
+                "partId": part_id,
+                "properties": [
+                    {"propertyId": k, "value": v} for k, v in properties.items()
+                ],
+            },
+        )
+
     # -- part studios -----------------------------------------------------
 
     def part_studio_features(

@@ -404,3 +404,74 @@ def test_mass_properties_are_one_call_for_the_whole_part_studio(monkeypatch):
 
     assert recorder.calls[0]["url"].endswith("/partstudios/d/D/w/W/e/E/massproperties")
     assert client.call_count == 1
+
+
+ELEMENT_METADATA = {
+    "jsonType": "metadata-element",
+    "elementId": "E",
+    "properties": [
+        {"name": "Name", "value": "NEW_PART", "propertyId": "p-name",
+         "editable": True, "valueType": "STRING"},
+        {"name": "Description", "value": "", "propertyId": "p-desc",
+         "editable": True, "valueType": "STRING"},
+        {"name": "Tab Id", "value": "E", "propertyId": "p-tab",
+         "editable": False, "computedProperty": True},
+    ],
+}
+
+
+def test_property_ids_skips_what_cannot_be_written(monkeypatch):
+    """Offering a read-only property would only invite a rejected call."""
+    mapping = OnshapeClient.property_ids(ELEMENT_METADATA)
+
+    assert mapping == {"Name": "p-name", "Description": "p-desc"}
+    assert OnshapeClient.property_ids(ELEMENT_METADATA, editable_only=False)["Tab Id"] == "p-tab"
+
+
+def test_property_ids_tolerates_an_empty_payload():
+    assert OnshapeClient.property_ids({}) == {}
+
+
+def test_renaming_a_tab_posts_property_ids(monkeypatch):
+    """A tab name is metadata; the write is keyed by id, not by name."""
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.update_element_metadata(ElementRef("D", "W", "E"), {"p-name": "PISTON"})
+
+    sent = recorder.calls[0]
+    assert sent["method"] == "POST"
+    assert sent["url"].endswith("/metadata/d/D/w/W/e/E")
+    assert sent["json"] == {"properties": [{"propertyId": "p-name", "value": "PISTON"}]}
+    assert client.call_count == 1
+
+
+def test_part_metadata_writes_carry_the_part_id_twice(monkeypatch):
+    """The docs put partId in the path and in the body; both are required."""
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.update_part_metadata(ElementRef("D", "W", "E"), "JHD", {"p-desc": "Drill bit"})
+
+    sent = recorder.calls[0]
+    assert sent["url"].endswith("/metadata/d/D/w/W/e/E/p/JHD")
+    assert sent["json"]["partId"] == "JHD"
+    assert sent["json"]["jsonType"] == "metadata-part"
+
+
+def test_a_cached_property_map_makes_a_write_one_call(monkeypatch):
+    """Read once, cache the ids, and later writes stop paying for discovery."""
+    client = OnshapeClient("access", "secret")
+
+    class Metadata(FakeResponse):
+        def json(self):
+            return ELEMENT_METADATA
+
+    monkeypatch.setattr(client._session, "request", lambda *a, **k: Metadata())
+    cached = client.property_ids(client.element_metadata(ElementRef("D", "W", "E")))
+    assert client.call_count == 1
+
+    client.update_element_metadata(ElementRef("D", "W", "E"), {cached["Name"]: "BRACKET"})
+    assert client.call_count == 2, "the write itself is one call"

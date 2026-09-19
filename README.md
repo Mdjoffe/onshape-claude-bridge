@@ -83,6 +83,16 @@ over tessellation. The client follows that redirect itself rather than letting
 the redirect leaves Onshape's host, since storage URLs carry their own
 authorization.
 
+Metadata -- tab names, part numbers, descriptions, custom properties -- is the
+second thing in Onshape that is text, and the only other thing that could
+sensibly live in git. `element_metadata` / `part_metadata` read it and
+`update_element_metadata` / `update_part_metadata` write it.
+
+Writes are keyed by `propertyId`, because that is what the API takes and
+resolving a name costs a read. `property_ids()` turns a metadata response into a
+name-to-id map worth caching: read once, keep the map, and later writes are one
+call each instead of two.
+
 `feature_health` is the cheapest check that a custom feature actually works:
 one call returns every feature in a Part Studio paired with the status Onshape
 last regenerated it to, so a FeatureScript that failed to compile shows up with
