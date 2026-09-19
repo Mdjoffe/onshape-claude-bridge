@@ -69,9 +69,9 @@ onshape-bridge push projects/my-thing --dry-run
 With the secrets absent it skips with a notice instead of failing, so an
 unconfigured repo stays green.
 
-`.github/workflows/doctor.yml` is manual-only and checks the credentials. Its
-`bridge_ref` input selects which branch of the bridge to install, so you can test
-an unmerged bridge change before it lands on `main`.
+`.github/workflows/doctor.yml` is manual-only and checks the credentials. It is
+stdlib-only and installs nothing, so that a failure there means Onshape rejected
+the keys rather than something upstream having gone wrong.
 
 ## Exports and repo size
 
