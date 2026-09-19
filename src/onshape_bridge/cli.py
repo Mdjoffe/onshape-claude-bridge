@@ -59,8 +59,26 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         if info.get(key):
             print(f"  {key}: {info[key]}")
     print("\nAPI access works on this account. Keys are valid and the REST API answered.")
-    print(f"\nOnshape API calls this run: {client.call_count}")
+    _report_usage(client)
     return 0
+
+
+def _report_usage(client: OnshapeClient) -> None:
+    """Close every run with what it spent, and what it was talking to.
+
+    Only metered responses are counted -- Onshape does not charge for 4xx or
+    5xx -- so this number is what belongs in API_BUDGET.md. The API version is
+    read off the response headers and costs nothing to report; it is the only
+    way to see which version an unversioned base URL resolved to.
+    """
+    print(f"\nOnshape API calls this run: {client.call_count}")
+    details = []
+    if client.api_version:
+        details.append(f"api version: {client.api_version}")
+    if client.rate_limit_remaining is not None:
+        details.append(f"endpoint calls left in window: {client.rate_limit_remaining}")
+    if details:
+        print("  " + "  |  ".join(details))
 
 
 def cmd_elements(args: argparse.Namespace) -> int:
@@ -73,7 +91,7 @@ def cmd_elements(args: argparse.Namespace) -> int:
                 f"  {element.get('id')}  {element.get('elementType', '?'):<12} "
                 f"{element.get('name', '')}"
             )
-    print(f"\nOnshape API calls this run: {client.call_count}")
+    _report_usage(client)
     return 0
 
 
@@ -82,8 +100,7 @@ def _report(results: list[SyncResult], client: OnshapeClient) -> int:
         print(result)
     if not results:
         print("nothing configured to sync")
-    # The Free plan's allowance is small enough to be worth spending knowingly.
-    print(f"\nOnshape API calls this run: {client.call_count}")
+    _report_usage(client)
     return 0
 
 

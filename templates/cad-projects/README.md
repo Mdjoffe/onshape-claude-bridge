@@ -92,7 +92,9 @@ keys rather than something upstream having broken. Costs 1 call.
 | Export (`pull`) | 2 + one per poll |
 
 Every run prints `Onshape API calls this run: N` as its last line — copy it into
-`API_BUDGET.md`.
+`API_BUDGET.md`. Failed calls are free and are not counted: Onshape meters 2xx
+and 3xx only. The same line reports which API version answered, which is worth
+reading if your base URL carries no version segment.
 
 **Exports are the expensive path.** Polling backs off (2s, 4s, 8s … capped at
 30s), so a five-minute export costs about a dozen calls rather than 150. Still

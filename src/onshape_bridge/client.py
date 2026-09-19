@@ -19,14 +19,23 @@ DEFAULT_BASE_URL = "https://cad.onshape.com/api"
 
 
 class OnshapeError(RuntimeError):
-    """An Onshape API call failed."""
+    """An Onshape API call failed.
 
-    def __init__(self, status: int, method: str, path: str, body: str):
+    A failed call is free: Onshape meters only 2xx and 3xx responses, so an
+    error here costs nothing but the round trip.
+    """
+
+    def __init__(self, status: int, method: str, path: str, body: str, retry_after: int | None = None):
         self.status = status
         self.method = method
         self.path = path
         self.body = body
-        super().__init__(f"{method} {path} -> HTTP {status}: {body[:500]}")
+        # Seconds until this endpoint's rate-limit window resets, on a 429.
+        self.retry_after = retry_after
+        detail = f"{method} {path} -> HTTP {status}: {body[:500]}"
+        if retry_after is not None:
+            detail += f" (retry after {retry_after}s)"
+        super().__init__(detail)
 
 
 @dataclass(frozen=True)
@@ -49,14 +58,24 @@ class OnshapeClient:
         secret_key: str,
         base_url: str = DEFAULT_BASE_URL,
         timeout: int = 60,
+        max_retry_after: int = 60,
     ):
         if not access_key or not secret_key:
             raise ValueError("access_key and secret_key are both required")
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # A 429 names its own wait in Retry-After. Waiting it out is right up to
+        # a point; past this many seconds, fail and let the caller decide rather
+        # than park a CI job for the rest of the window.
+        self.max_retry_after = max_retry_after
         # The Free plan meters calls against a small annual allowance, so every
-        # request is counted and reported rather than left to guesswork.
+        # metered request is counted and reported rather than left to guesswork.
         self.call_count = 0
+        # Read back off the responses, so a run can report what it was talking
+        # to. X-Api-Version settles which API version an unversioned base URL
+        # actually resolved to, and costs nothing to observe.
+        self.api_version: str | None = None
+        self.rate_limit_remaining: int | None = None
         self._session = requests.Session()
         self._session.auth = (access_key, secret_key)
         self._session.headers.update(
@@ -77,16 +96,68 @@ class OnshapeClient:
 
     # -- plumbing ---------------------------------------------------------
 
-    def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
+    @staticmethod
+    def _retry_after(response: requests.Response) -> int | None:
+        """Seconds Onshape asked us to wait, if it said so in a parseable way."""
+        raw = response.headers.get("Retry-After")
+        try:
+            return int(raw) if raw is not None else None
+        except ValueError:
+            return None
+
+    def _send(self, method: str, path: str, **kwargs: Any) -> requests.Response:
         url = f"{self.base_url}/{path.lstrip('/')}"
-        self.call_count += 1
         response = self._session.request(method, url, timeout=self.timeout, **kwargs)
+
+        # Onshape meters 2xx and 3xx only; 4xx and 5xx are explicitly free. An
+        # earlier version of this client counted failures too, on the reasoning
+        # that a 404 proves the server did a lookup. Onshape's published limits
+        # say otherwise, and counting them overstates the spend.
+        #
+        # Redirects are the one gap: requests follows a 307 itself, so we see
+        # the final response and count once where Onshape metered twice.
+        if 200 <= response.status_code < 400:
+            self.call_count += 1
+
+        version = response.headers.get("X-Api-Version")
+        if version:
+            self.api_version = version
+        remaining = response.headers.get("X-Rate-Limit-Remaining")
+        if remaining is not None:
+            try:
+                self.rate_limit_remaining = int(remaining)
+            except ValueError:
+                pass
+        return response
+
+    def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
+        response = self._send(method, path, **kwargs)
+
+        # A 429 is a rate limit, not the annual allowance, and it costs nothing.
+        # Retrying once after the wait Onshape names is usually all it takes.
+        if response.status_code == 429:
+            delay = self._retry_after(response)
+            if delay is not None and 0 <= delay <= self.max_retry_after:
+                time.sleep(delay)
+                response = self._send(method, path, **kwargs)
+
         if not response.ok:
-            raise OnshapeError(response.status_code, method, path, response.text)
+            raise OnshapeError(
+                response.status_code,
+                method,
+                path,
+                response.text,
+                self._retry_after(response),
+            )
         return response
 
     def get_json(self, path: str, **kwargs: Any) -> Any:
-        return self.request("GET", path, **kwargs).json()
+        response = self.request("GET", path, **kwargs)
+        # 204 carries no body at all, and parsing one raises rather than
+        # returning nothing. Callers get None and can tell "empty" from "{}".
+        if response.status_code == 204 or not response.content:
+            return None
+        return response.json()
 
     def post_json(self, path: str, payload: Any, **kwargs: Any) -> Any:
         response = self.request("POST", path, json=payload, **kwargs)

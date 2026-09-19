@@ -55,9 +55,17 @@ Both sync directions compare before writing: identical content reports
 `unchanged` and makes no API call, so re-running in CI creates no Onshape
 microversions and no empty git diffs.
 
-Every run reports `Onshape API calls this run: N` as its last line. The Onshape
-Free plan meters roughly 2500 calls per user per year, so the commands are built
-to spend as few as possible and to say how many they spent.
+Every run reports `Onshape API calls this run: N` as its last line, alongside
+the API version the server answered as and how many calls that endpoint has left
+in its rate-limit window. The Onshape Free plan meters 2500 calls per user per
+year, so the commands are built to spend as few as possible and to say how many
+they spent.
+
+Only metered responses are counted. Onshape charges for 2xx and 3xx and
+explicitly does not charge for 4xx or 5xx, so a failed call is free and the
+counter does not move. A `429` is a per-endpoint rate limit rather than the
+annual allowance: the client waits the `Retry-After` the server names and
+retries once, or raises if that wait is longer than `max_retry_after`.
 
 `push --assume-changed` skips the comparison read and uploads unconditionally:
 1 call per file instead of 2. Use it when git already established the file
