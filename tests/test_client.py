@@ -338,3 +338,69 @@ def test_the_tight_bounding_box_script_is_a_lambda(monkeypatch):
     script = recorder.calls[0]["json"]["script"]
     assert script.startswith("function(context is Context")
     assert '"tight": true' in script
+
+
+FEATURE_LISTING = {
+    "features": [
+        {"featureId": "f1", "name": "Sketch 1", "featureType": "newSketch"},
+        {"featureId": "f2", "name": "Bracket 1", "featureType": "bracket"},
+    ],
+    "featureStates": {
+        "f1": {"featureStatus": "OK", "inactive": False},
+        "f2": {"featureStatus": "ERROR", "inactive": False},
+    },
+    "libraryVersion": 2232,
+}
+
+
+def test_feature_health_names_the_broken_feature(monkeypatch):
+    """This is how a custom feature that failed to regenerate shows itself."""
+    client = OnshapeClient("access", "secret")
+
+    class Listing(FakeResponse):
+        def json(self):
+            return FEATURE_LISTING
+
+    monkeypatch.setattr(client._session, "request", lambda *a, **k: Listing())
+
+    health = client.feature_health(ElementRef("D", "W", "E"))
+
+    assert [f["status"] for f in health] == ["OK", "ERROR"]
+    assert [f["name"] for f in health if f["status"] != "OK"] == ["Bracket 1"]
+    assert client.call_count == 1, "one call answers it"
+
+
+def test_feature_health_survives_a_missing_state(monkeypatch):
+    client = OnshapeClient("access", "secret")
+
+    class Listing(FakeResponse):
+        def json(self):
+            return {"features": [{"featureId": "f9", "name": "Orphan"}]}
+
+    monkeypatch.setattr(client._session, "request", lambda *a, **k: Listing())
+
+    assert client.feature_health(ElementRef("D", "W", "E"))[0]["status"] == "UNKNOWN"
+
+
+def test_sketch_geometry_is_left_out_by_default(monkeypatch):
+    """Sketch entities dominate the payload and are not what we came for."""
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.part_studio_features(ElementRef("D", "W", "E"))
+
+    assert recorder.calls[0]["params"]["noSketchGeometry"] == "true"
+    assert recorder.calls[0]["params"]["rollbackBarIndex"] == -1
+
+
+def test_mass_properties_are_one_call_for_the_whole_part_studio(monkeypatch):
+    """Part Studio level, not per part -- one call covers every body."""
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.part_studio_mass_properties(ElementRef("D", "W", "E"))
+
+    assert recorder.calls[0]["url"].endswith("/partstudios/d/D/w/W/e/E/massproperties")
+    assert client.call_count == 1

@@ -253,6 +253,65 @@ class OnshapeClient:
             payload.update(extra)
         return self.post_json(f"/{element_kind}/{ref.path_suffix}/translations", payload)
 
+    # -- part studios -----------------------------------------------------
+
+    def part_studio_features(
+        self,
+        ref: ElementRef,
+        rollback_bar_index: int = -1,
+        include_geometry_ids: bool = True,
+        no_sketch_geometry: bool = True,
+    ) -> dict:
+        """The feature list, with each feature's regeneration status.
+
+        `noSketchGeometry` defaults to true here where Onshape's example sends
+        false: sketch entities and constraints dominate the response, and the
+        thing worth reading is usually `featureStates`.
+        """
+        return self.get_json(
+            f"/partstudios/{ref.path_suffix}/features",
+            params={
+                "rollbackBarIndex": rollback_bar_index,
+                "includeGeometryIds": str(include_geometry_ids).lower(),
+                "noSketchGeometry": str(no_sketch_geometry).lower(),
+            },
+        )
+
+    def feature_health(self, ref: ElementRef, **kwargs: Any) -> list[dict]:
+        """Every feature paired with the status Onshape last regenerated it to.
+
+        One call, and the cheapest honest answer to "did this FeatureScript
+        work?": a custom feature that failed to compile or regenerate appears
+        here with a `status` other than OK. Unlike evaluating a lambda, this
+        reports on the real feature as the Part Studio built it.
+        """
+        listing = self.part_studio_features(ref, **kwargs)
+        states = listing.get("featureStates") or {}
+        health = []
+        for feature in listing.get("features") or []:
+            feature_id = feature.get("featureId")
+            state = states.get(feature_id) or {}
+            health.append(
+                {
+                    "featureId": feature_id,
+                    "name": feature.get("name"),
+                    "featureType": feature.get("featureType"),
+                    "status": state.get("featureStatus", "UNKNOWN"),
+                    "inactive": state.get("inactive", False),
+                }
+            )
+        return health
+
+    def part_studio_mass_properties(self, ref: ElementRef) -> dict:
+        """Mass, volume, centroid and inertia for the whole Part Studio.
+
+        One call for every body together, under `bodies["-all-"]`, rather than
+        one per part. Each scalar comes back as [value, lower, upper] -- the
+        bounds are Onshape's tolerance on the figure, not three separate
+        answers. `hasMass` is false until a material is assigned.
+        """
+        return self.get_json(f"/partstudios/{ref.path_suffix}/massproperties")
+
     # A lambda that measures the real geometry. Onshape's own
     # getPartStudioBoundingBoxes endpoint is documented as approximate -- "meant
     # for graphics and visualization" -- so a tight box has to be evaluated.

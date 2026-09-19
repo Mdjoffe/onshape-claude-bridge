@@ -83,6 +83,16 @@ over tessellation. The client follows that redirect itself rather than letting
 the redirect leaves Onshape's host, since storage URLs carry their own
 authorization.
 
+`feature_health` is the cheapest check that a custom feature actually works:
+one call returns every feature in a Part Studio paired with the status Onshape
+last regenerated it to, so a FeatureScript that failed to compile shows up with
+a status other than `OK`.
+
+`part_studio_mass_properties` covers every body in a Part Studio in one call --
+mass, volume, centroid, inertia -- rather than one call per part. Each figure
+arrives as `[value, lower, upper]`, where the bounds are Onshape's tolerance on
+it. `hasMass` stays false until a material is assigned.
+
 `evaluate_featurescript` runs a FeatureScript lambda against a Part Studio and
 returns whatever it returns. That is one call for as many measurements as the
 lambda cares to compute, rather than one REST call each -- `tight_bounding_box`
