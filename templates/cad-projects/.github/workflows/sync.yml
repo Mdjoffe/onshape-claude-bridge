@@ -40,11 +40,30 @@ jobs:
         with:
           python-version: '3.11'
 
+      # Without credentials there is nothing this workflow can usefully do, so
+      # report why and finish green rather than failing every run until the
+      # secrets exist.
+      - name: Check for credentials
+        id: creds
+        env:
+          ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
+          ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
+        run: |
+          if [ -n "$ONSHAPE_ACCESS_KEY" ] && [ -n "$ONSHAPE_SECRET_KEY" ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY are not set, so the sync was skipped. Add them under Settings > Secrets and variables > Actions.'
+          fi
+
+      # Requires the bridge to be merged to main in onshape-claude-bridge.
       - name: Install the bridge
+        if: steps.creds.outputs.present == 'true'
         run: pip install "git+https://github.com/Mdjoffe/onshape-claude-bridge.git@main"
 
       - name: Work out which projects changed
         id: scope
+        if: steps.creds.outputs.present == 'true'
         run: |
           set -euo pipefail
           if [ -n "${{ inputs.project }}" ]; then
@@ -52,16 +71,16 @@ jobs:
             exit 0
           fi
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "paths=." >> "$GITHUB_OUTPUT"
+            echo 'paths=.' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Map changed files back to the project directory that owns them.
           base='${{ github.event.pull_request.base.sha || github.event.before }}'
           # A brand new branch reports an all-zeros "before"; sync everything then.
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            echo "paths=." >> "$GITHUB_OUTPUT"
+            echo 'paths=.' >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Map each changed file back to the project directory that owns it.
           changed=$(git diff --name-only "$base" "${{ github.sha }}" -- lib projects \
             | while read -r f; do
                 d=$(dirname "$f")
@@ -71,12 +90,12 @@ jobs:
           echo "paths=${changed}" >> "$GITHUB_OUTPUT"
 
       - name: Validate configs
+        if: steps.creds.outputs.present == 'true' && steps.scope.outputs.paths != ''
         run: |
           for p in ${{ steps.scope.outputs.paths }}; do onshape-bridge validate "$p"; done
-        if: steps.scope.outputs.paths != ''
 
       - name: Sync
-        if: steps.scope.outputs.paths != ''
+        if: steps.creds.outputs.present == 'true' && steps.scope.outputs.paths != ''
         env:
           ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
           ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
@@ -91,7 +110,10 @@ jobs:
           done
 
       - name: Commit exports
-        if: inputs.direction == 'pull' && github.event_name == 'workflow_dispatch'
+        if: |
+          steps.creds.outputs.present == 'true'
+          && inputs.direction == 'pull'
+          && github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           git config user.name  'github-actions[bot]'
