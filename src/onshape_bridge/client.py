@@ -253,6 +253,47 @@ class OnshapeClient:
             payload.update(extra)
         return self.post_json(f"/{element_kind}/{ref.path_suffix}/translations", payload)
 
+    # A lambda that measures the real geometry. Onshape's own
+    # getPartStudioBoundingBoxes endpoint is documented as approximate -- "meant
+    # for graphics and visualization" -- so a tight box has to be evaluated.
+    TIGHT_BOUNDING_BOX = (
+        "function(context is Context, definition is map) {"
+        ' return evBox3d(context, { "topology":'
+        ' qConstructionFilter(qEverything(), ConstructionObject.NO),'
+        ' "tight": true }); }'
+    )
+
+    def evaluate_featurescript(
+        self,
+        ref: ElementRef,
+        script: str,
+        library_version: int | None = None,
+        rollback_bar_index: int = -1,
+    ) -> Any:
+        """Run a FeatureScript lambda against a Part Studio and get the result.
+
+        One metered call, and the lambda decides what comes back -- so several
+        measurements that would each be their own REST call can be answered
+        together, by one script that returns a map of them.
+
+        Only lambda expressions evaluate here. A Feature Studio's source, with
+        its `FeatureScript` version header, its imports and its exported
+        feature definitions, is not a lambda: this endpoint cannot be used to
+        check that such a file compiles.
+        """
+        payload: dict[str, Any] = {"script": script}
+        if library_version is not None:
+            payload["libraryVersion"] = library_version
+        return self.post_json(
+            f"/partstudios/{ref.path_suffix}/featurescript",
+            payload,
+            params={"rollbackBarIndex": rollback_bar_index},
+        )
+
+    def tight_bounding_box(self, ref: ElementRef, library_version: int | None = None) -> Any:
+        """Measure a Part Studio's real extents, excluding construction geometry."""
+        return self.evaluate_featurescript(ref, self.TIGHT_BOUNDING_BOX, library_version)
+
     def translator_formats(self) -> list[dict]:
         """Every format Onshape can translate, and in which direction.
 

@@ -83,6 +83,13 @@ over tessellation. The client follows that redirect itself rather than letting
 the redirect leaves Onshape's host, since storage URLs carry their own
 authorization.
 
+`evaluate_featurescript` runs a FeatureScript lambda against a Part Studio and
+returns whatever it returns. That is one call for as many measurements as the
+lambda cares to compute, rather than one REST call each -- `tight_bounding_box`
+is the worked example, and exists because Onshape's own bounding-box endpoint is
+documented as approximate. Note the constraint: **only lambdas evaluate here**,
+so this cannot be used to check that a Feature Studio's source compiles.
+
 `translator_formats()` lists every format Onshape will accept or produce. One
 call, and it turns a guessed `formatName` into a checked one before a
 translation is started.

@@ -293,3 +293,48 @@ def test_translator_formats_is_one_call(monkeypatch):
 
     assert client.translator_formats()[0]["name"] == "STEP"
     assert client.call_count == 1
+
+
+def test_evaluating_featurescript_is_one_call(monkeypatch):
+    """The lambda decides what comes back, so batched metrics cost one call."""
+    client = OnshapeClient("access", "secret")
+
+    class Measured(FakeResponse):
+        def json(self):
+            return {"result": {"message": {"value": 42}}}
+
+    recorder = Recorder([Measured()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.evaluate_featurescript(
+        ElementRef("D", "W", "E"), "function(context is Context) { return 42; }"
+    )
+
+    assert client.call_count == 1
+    sent = recorder.calls[0]
+    assert sent["url"].endswith("/partstudios/d/D/w/W/e/E/featurescript")
+    assert sent["params"] == {"rollbackBarIndex": -1}
+    assert "libraryVersion" not in sent["json"], "omitted unless asked for"
+
+
+def test_a_pinned_library_version_is_sent(monkeypatch):
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.evaluate_featurescript(ElementRef("D", "W", "E"), "f", library_version=2144)
+
+    assert recorder.calls[0]["json"]["libraryVersion"] == 2144
+
+
+def test_the_tight_bounding_box_script_is_a_lambda(monkeypatch):
+    """Onshape's own bounding-box endpoint is approximate; this one measures."""
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.tight_bounding_box(ElementRef("D", "W", "E"))
+
+    script = recorder.calls[0]["json"]["script"]
+    assert script.startswith("function(context is Context")
+    assert '"tight": true' in script
