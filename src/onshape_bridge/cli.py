@@ -59,6 +59,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         if info.get(key):
             print(f"  {key}: {info[key]}")
     print("\nAPI access works on this account. Keys are valid and the REST API answered.")
+    print(f"\nOnshape API calls this run: {client.call_count}")
     return 0
 
 
@@ -72,14 +73,17 @@ def cmd_elements(args: argparse.Namespace) -> int:
                 f"  {element.get('id')}  {element.get('elementType', '?'):<12} "
                 f"{element.get('name', '')}"
             )
+    print(f"\nOnshape API calls this run: {client.call_count}")
     return 0
 
 
-def _report(results: list[SyncResult]) -> int:
+def _report(results: list[SyncResult], client: OnshapeClient) -> int:
     for result in results:
         print(result)
     if not results:
         print("nothing configured to sync")
+    # The Free plan's allowance is small enough to be worth spending knowingly.
+    print(f"\nOnshape API calls this run: {client.call_count}")
     return 0
 
 
@@ -87,8 +91,10 @@ def cmd_push(args: argparse.Namespace) -> int:
     client = OnshapeClient.from_env(args.base_url)
     results: list[SyncResult] = []
     for project in _load(args.path):
-        results += push_feature_studios(client, project, dry_run=args.dry_run)
-    return _report(results)
+        results += push_feature_studios(
+            client, project, dry_run=args.dry_run, assume_changed=args.assume_changed
+        )
+    return _report(results, client)
 
 
 def cmd_pull(args: argparse.Namespace) -> int:
@@ -96,7 +102,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
     results: list[SyncResult] = []
     for project in _load(args.path):
         results += pull_exports(client, project, dry_run=args.dry_run)
-    return _report(results)
+    return _report(results, client)
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -136,6 +142,13 @@ def build_parser() -> argparse.ArgumentParser:
         if func in (cmd_push, cmd_pull):
             sub.add_argument(
                 "--dry-run", action="store_true", help="report what would change, change nothing"
+            )
+        if func is cmd_push:
+            sub.add_argument(
+                "--assume-changed",
+                action="store_true",
+                help="skip the comparison read and upload unconditionally, halving "
+                "the call cost per file (costs a needless microversion if unchanged)",
             )
         sub.set_defaults(func=func)
 

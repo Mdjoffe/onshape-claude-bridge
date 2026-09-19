@@ -45,9 +45,19 @@ def _unconfigured(project: ProjectConfig, action: str) -> list[SyncResult]:
 
 
 def push_feature_studios(
-    client: OnshapeClient, project: ProjectConfig, dry_run: bool = False
+    client: OnshapeClient,
+    project: ProjectConfig,
+    dry_run: bool = False,
+    assume_changed: bool = False,
 ) -> list[SyncResult]:
-    """Upload each FeatureScript file whose repo copy differs from Onshape's."""
+    """Upload each FeatureScript file whose repo copy differs from Onshape's.
+
+    `assume_changed` skips the comparison read and uploads unconditionally,
+    halving the call cost per file. Worth it when git already established the
+    file changed -- a CI run filtered on this project's paths, or a manual sync
+    you triggered because you edited something. The cost of being wrong is one
+    needless Onshape microversion.
+    """
     if skipped := _unconfigured(project, "push"):
         return skipped
 
@@ -67,17 +77,31 @@ def push_feature_studios(
             continue
 
         local = source.read_text()
-        remote = client.get_feature_studio_contents(project.ref(sync.element_id))
-        if local == remote:
-            results.append(SyncResult(project.name, "push", target, "unchanged"))
-            continue
+
+        if not assume_changed:
+            remote = client.get_feature_studio_contents(project.ref(sync.element_id))
+            if local == remote:
+                results.append(SyncResult(project.name, "push", target, "unchanged"))
+                continue
 
         if dry_run:
-            results.append(SyncResult(project.name, "push", target, "would-update"))
+            results.append(
+                SyncResult(
+                    project.name,
+                    "push",
+                    target,
+                    "would-update",
+                    "not compared" if assume_changed else "",
+                )
+            )
             continue
 
         client.update_feature_studio_contents(project.ref(sync.element_id), local)
-        results.append(SyncResult(project.name, "push", target, "updated"))
+        results.append(
+            SyncResult(
+                project.name, "push", target, "updated", "not compared" if assume_changed else ""
+            )
+        )
     return results
 
 

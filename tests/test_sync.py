@@ -143,3 +143,66 @@ def test_pull_also_skips_an_unconfigured_project(tmp_path):
     results = pull_exports(ExplodingClient(), project)
 
     assert [r.status for r in results] == ["unconfigured"]
+
+
+class CountingClient(FakeClient):
+    """Counts reads so tests can assert the call cost of a push."""
+
+    def __init__(self, remote_contents=""):
+        super().__init__(remote_contents)
+        self.reads = 0
+
+    def get_feature_studio_contents(self, ref):
+        self.reads += 1
+        return super().get_feature_studio_contents(ref)
+
+
+def test_assume_changed_skips_the_comparison_read(tmp_path):
+    project = make_project(tmp_path)
+    client = CountingClient(remote_contents="stale")
+
+    results = push_feature_studios(client, project, assume_changed=True)
+
+    assert client.reads == 0, "the comparison read is the call we are saving"
+    assert [r.status for r in results] == ["updated"]
+    assert client.updates == [("FS789", "FeatureScript 1234;\n")]
+
+
+def test_default_still_compares_before_writing(tmp_path):
+    project = make_project(tmp_path)
+    client = CountingClient(remote_contents="stale")
+
+    push_feature_studios(client, project)
+
+    assert client.reads == 1
+
+
+def test_assume_changed_uploads_even_when_identical(tmp_path):
+    """The documented cost of the shortcut: a needless microversion."""
+    project = make_project(tmp_path)
+    client = CountingClient(remote_contents="FeatureScript 1234;\n")
+
+    results = push_feature_studios(client, project, assume_changed=True)
+
+    assert [r.status for r in results] == ["updated"]
+    assert len(client.updates) == 1
+
+
+def test_assume_changed_still_skips_unconfigured_projects(tmp_path):
+    """The shortcut must not bypass the placeholder guard and spend a call."""
+    project = write_project(tmp_path, PLACEHOLDER_CONFIG, "unset")
+
+    results = push_feature_studios(ExplodingClient(), project, assume_changed=True)
+
+    assert [r.status for r in results] == ["unconfigured"]
+
+
+def test_assume_changed_dry_run_writes_nothing(tmp_path):
+    project = make_project(tmp_path)
+    client = CountingClient(remote_contents="stale")
+
+    results = push_feature_studios(client, project, dry_run=True, assume_changed=True)
+
+    assert [r.status for r in results] == ["would-update"]
+    assert client.updates == []
+    assert client.reads == 0

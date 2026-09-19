@@ -54,6 +54,9 @@ class OnshapeClient:
             raise ValueError("access_key and secret_key are both required")
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # The Free plan meters calls against a small annual allowance, so every
+        # request is counted and reported rather than left to guesswork.
+        self.call_count = 0
         self._session = requests.Session()
         self._session.auth = (access_key, secret_key)
         self._session.headers.update(
@@ -76,6 +79,7 @@ class OnshapeClient:
 
     def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
         url = f"{self.base_url}/{path.lstrip('/')}"
+        self.call_count += 1
         response = self._session.request(method, url, timeout=self.timeout, **kwargs)
         if not response.ok:
             raise OnshapeError(response.status_code, method, path, response.text)
@@ -141,10 +145,21 @@ class OnshapeClient:
         return self.get_json(f"/translations/{translation_id}")
 
     def wait_for_translation(
-        self, translation_id: str, poll_seconds: float = 2.0, timeout_seconds: float = 600.0
+        self,
+        translation_id: str,
+        poll_seconds: float = 2.0,
+        max_poll_seconds: float = 30.0,
+        timeout_seconds: float = 600.0,
     ) -> dict:
-        """Poll until the export job leaves ACTIVE, or raise on timeout."""
+        """Poll until the export job leaves ACTIVE, or raise on timeout.
+
+        The delay doubles up to `max_poll_seconds`, because each poll is a
+        metered API call. At a flat 2s a five-minute export costs about 150
+        calls; backing off brings that to roughly a dozen, at the price of
+        noticing completion up to `max_poll_seconds` late.
+        """
         deadline = time.monotonic() + timeout_seconds
+        delay = poll_seconds
         while True:
             job = self.translation(translation_id)
             state = job.get("requestState")
@@ -161,7 +176,8 @@ class OnshapeClient:
                 raise TimeoutError(
                     f"translation {translation_id} still ACTIVE after {timeout_seconds}s"
                 )
-            time.sleep(poll_seconds)
+            time.sleep(delay)
+            delay = min(delay * 2, max_poll_seconds)
 
     def download_external_data(self, document_id: str, foreign_id: str) -> bytes:
         """Fetch the bytes a finished translation stored in the document."""
