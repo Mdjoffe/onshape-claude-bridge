@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .client import OnshapeClient
-from .config import ProjectConfig
+from .config import ProjectConfig, is_placeholder
 
 
 @dataclass
@@ -20,7 +20,7 @@ class SyncResult:
     project: str
     action: str
     target: str
-    status: str  # "updated" | "unchanged" | "skipped" | "would-update"
+    status: str  # "updated" | "unchanged" | "skipped" | "unconfigured" | "would-update"
     detail: str = ""
 
     def __str__(self) -> str:
@@ -28,14 +28,38 @@ class SyncResult:
         return f"{line} ({self.detail})" if self.detail else line
 
 
+def _unconfigured(project: ProjectConfig, action: str) -> list[SyncResult]:
+    """One result explaining the skip, or an empty list if the project is ready."""
+    pending = project.unconfigured
+    if not pending:
+        return []
+    return [
+        SyncResult(
+            project.name,
+            action,
+            "-",
+            "unconfigured",
+            "still placeholders: " + ", ".join(pending),
+        )
+    ]
+
+
 def push_feature_studios(
     client: OnshapeClient, project: ProjectConfig, dry_run: bool = False
 ) -> list[SyncResult]:
     """Upload each FeatureScript file whose repo copy differs from Onshape's."""
+    if skipped := _unconfigured(project, "push"):
+        return skipped
+
     results: list[SyncResult] = []
     for sync in project.feature_studios:
         source = project.source_path(sync)
         target = str(sync.source)
+        if is_placeholder(sync.element_id):
+            results.append(
+                SyncResult(project.name, "push", target, "unconfigured", "placeholder element id")
+            )
+            continue
         if not source.is_file():
             results.append(
                 SyncResult(project.name, "push", target, "skipped", "no such file in repo")
@@ -61,9 +85,17 @@ def pull_exports(
     client: OnshapeClient, project: ProjectConfig, dry_run: bool = False
 ) -> list[SyncResult]:
     """Run each configured translation and write the bytes into the repo."""
+    if skipped := _unconfigured(project, "pull"):
+        return skipped
+
     results: list[SyncResult] = []
     for sync in project.exports:
         target = str(sync.output)
+        if is_placeholder(sync.element_id):
+            results.append(
+                SyncResult(project.name, "pull", target, "unconfigured", "placeholder element id")
+            )
+            continue
         if dry_run:
             results.append(
                 SyncResult(project.name, "pull", target, "would-update", sync.format_name)

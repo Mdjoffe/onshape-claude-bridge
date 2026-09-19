@@ -55,6 +55,12 @@ Both sync directions compare before writing: identical content reports
 `unchanged` and makes no API call, so re-running in CI creates no Onshape
 microversions and no empty git diffs.
 
+A project whose ids are still the scaffold's `REPLACE_WITH_...` placeholders
+reports `unconfigured` and is skipped without contacting Onshape. That is what
+lets you point one project at a real document while the rest of the repo stays
+unconfigured -- without it, the first unconfigured project 404s and takes the
+whole run down with it.
+
 ## Project config
 
 One `onshape.yml` per project directory, in the content repo:

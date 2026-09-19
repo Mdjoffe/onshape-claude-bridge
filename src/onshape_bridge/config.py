@@ -17,6 +17,17 @@ from .client import ElementRef
 
 VALID_ELEMENT_KINDS = {"partstudios", "assemblies", "drawings", "blobelements"}
 
+# Scaffolded configs ship with ids like REPLACE_WITH_DOCUMENT_ID. Sending one to
+# Onshape earns a 404 that reads like a real failure, so they are detected and
+# skipped instead -- which lets you configure one project at a time without the
+# rest of the repo breaking the run.
+PLACEHOLDER_PREFIX = "REPLACE_WITH"
+
+
+def is_placeholder(value: str) -> bool:
+    """True if this id is still the scaffold's placeholder rather than a real id."""
+    return value.strip().upper().startswith(PLACEHOLDER_PREFIX)
+
 
 class ConfigError(ValueError):
     """An onshape.yml is missing a field or has an unusable value."""
@@ -52,6 +63,16 @@ class ProjectConfig:
 
     def ref(self, element_id: str) -> ElementRef:
         return ElementRef(self.document_id, self.workspace_id, element_id)
+
+    @property
+    def unconfigured(self) -> tuple[str, ...]:
+        """Which document-level ids are still placeholders. Empty means ready."""
+        pending = []
+        if is_placeholder(self.document_id):
+            pending.append("document.id")
+        if is_placeholder(self.workspace_id):
+            pending.append("document.workspace")
+        return tuple(pending)
 
     def source_path(self, sync: FeatureStudioSync) -> Path:
         return self.root / sync.source
