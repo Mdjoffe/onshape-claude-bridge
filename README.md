@@ -55,9 +55,17 @@ Both sync directions compare before writing: identical content reports
 `unchanged` and makes no API call, so re-running in CI creates no Onshape
 microversions and no empty git diffs.
 
-Every run reports `Onshape API calls this run: N` as its last line. The Onshape
-Free plan meters roughly 2500 calls per user per year, so the commands are built
-to spend as few as possible and to say how many they spent.
+Every run reports `Onshape API calls this run: N` as its last line, alongside
+the API version the server answered as and how many calls that endpoint has left
+in its rate-limit window. The Onshape Free plan meters 2500 calls per user per
+year, so the commands are built to spend as few as possible and to say how many
+they spent.
+
+Only metered responses are counted. Onshape charges for 2xx and 3xx and
+explicitly does not charge for 4xx or 5xx, so a failed call is free and the
+counter does not move. A `429` is a per-endpoint rate limit rather than the
+annual allowance: the client waits the `Retry-After` the server names and
+retries once, or raises if that wait is longer than `max_retry_after`.
 
 `push --assume-changed` skips the comparison read and uploads unconditionally:
 1 call per file instead of 2. Use it when git already established the file
@@ -66,6 +74,65 @@ being wrong is one needless Onshape microversion.
 
 Export polling backs off (2s, 4s, 8s ... capped at 30s) rather than hammering a
 flat interval, which takes a five-minute export from about 150 calls to a dozen.
+
+Cheaper still, where it fits: `export_part_studio_stl` uses Onshape's
+*synchronous* STL export, which answers with a 307 to the finished file. Two
+calls, against the dozen a translation job costs, in exchange for no control
+over tessellation. The client follows that redirect itself rather than letting
+`requests` do it, so both hops are counted -- and it withholds the API keys when
+the redirect leaves Onshape's host, since storage URLs carry their own
+authorization.
+
+`list_documents` searches an account and follows `next` until the results run
+out, bounded by `max_pages` so a search that matches more than expected stops
+rather than emptying the year's allowance a page at a time. Each page is one
+call and holds at most 20 documents.
+
+`create_version` freezes a workspace under a name. Naming it after the commit
+that produced it is what ties Onshape's history to git's, for the geometry git
+cannot hold.
+
+Configurations are read with `get_configuration`, written with
+`update_configuration`, and turned into the strings other calls want by
+`encode_configuration`. `configuration_options()` exists for one trap: each
+option carries both an `optionName` for people ("500 mm") and an `option` for
+the API (`_500_mm`), and only the second is accepted as a value.
+
+`export_part_studio_stl` takes a `configuration`, which must be the `encodedId`
+rather than the `queryParam`. The two differ by a leading `configuration=`, and
+sending the wrong one produces a doubly-encoded parameter that Onshape reads as
+a different configuration.
+
+Metadata -- tab names, part numbers, descriptions, custom properties -- is the
+second thing in Onshape that is text, and the only other thing that could
+sensibly live in git. `element_metadata` / `part_metadata` read it and
+`update_element_metadata` / `update_part_metadata` write it.
+
+Writes are keyed by `propertyId`, because that is what the API takes and
+resolving a name costs a read. `property_ids()` turns a metadata response into a
+name-to-id map worth caching: read once, keep the map, and later writes are one
+call each instead of two.
+
+`feature_health` is the cheapest check that a custom feature actually works:
+one call returns every feature in a Part Studio paired with the status Onshape
+last regenerated it to, so a FeatureScript that failed to compile shows up with
+a status other than `OK`.
+
+`part_studio_mass_properties` covers every body in a Part Studio in one call --
+mass, volume, centroid, inertia -- rather than one call per part. Each figure
+arrives as `[value, lower, upper]`, where the bounds are Onshape's tolerance on
+it. `hasMass` stays false until a material is assigned.
+
+`evaluate_featurescript` runs a FeatureScript lambda against a Part Studio and
+returns whatever it returns. That is one call for as many measurements as the
+lambda cares to compute, rather than one REST call each -- `tight_bounding_box`
+is the worked example, and exists because Onshape's own bounding-box endpoint is
+documented as approximate. Note the constraint: **only lambdas evaluate here**,
+so this cannot be used to check that a Feature Studio's source compiles.
+
+`translator_formats()` lists every format Onshape will accept or produce. One
+call, and it turns a guessed `formatName` into a checked one before a
+translation is started.
 
 A project whose ids are still the scaffold's `REPLACE_WITH_...` placeholders
 reports `unconfigured` and is skipped without contacting Onshape. That is what

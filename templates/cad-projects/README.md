@@ -89,10 +89,14 @@ keys rather than something upstream having broken. Costs 1 call.
 | Push, changed | 2 |
 | Push with **assume changed** | 1 |
 | `doctor` | 1 |
-| Export (`pull`) | 2 + one per poll |
+| Export (`pull`, async translation) | 2 + one per poll, ~12 for five minutes |
+| Export (synchronous STL/Parasolid/glTF) | 2 — the 307 and the fetch |
+| `translator_formats` (check a format name) | 1 |
 
 Every run prints `Onshape API calls this run: N` as its last line — copy it into
-`API_BUDGET.md`.
+`API_BUDGET.md`. Failed calls are free and are not counted: Onshape meters 2xx
+and 3xx only. The same line reports which API version answered, which is worth
+reading if your base URL carries no version segment.
 
 **Exports are the expensive path.** Polling backs off (2s, 4s, 8s … capped at
 30s), so a five-minute export costs about a dozen calls rather than 150. Still
