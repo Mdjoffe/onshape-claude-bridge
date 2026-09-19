@@ -80,3 +80,66 @@ def test_push_skips_a_source_missing_from_the_repo(tmp_path):
 
 def test_pull_with_nothing_configured(tmp_path):
     assert pull_exports(FakeClient(), make_project(tmp_path)) == []
+
+
+PLACEHOLDER_CONFIG = """
+project: unset
+document:
+  id: REPLACE_WITH_DOCUMENT_ID
+  workspace: REPLACE_WITH_WORKSPACE_ID
+feature_studios:
+  - source: featurescript/dock.fs
+    element: REPLACE_WITH_FEATURE_STUDIO_ELEMENT_ID
+"""
+
+PLACEHOLDER_ELEMENT_ONLY = """
+project: half-set
+document:
+  id: DOC123
+  workspace: WS456
+feature_studios:
+  - source: featurescript/dock.fs
+    element: REPLACE_WITH_FEATURE_STUDIO_ELEMENT_ID
+"""
+
+
+class ExplodingClient(FakeClient):
+    """Any API call is a failure: unconfigured projects must not reach the network."""
+
+    def get_feature_studio_contents(self, ref):
+        raise AssertionError(f"should not have called Onshape for {ref}")
+
+
+def write_project(tmp_path: Path, config: str, name: str):
+    project = tmp_path / name
+    (project / "featurescript").mkdir(parents=True)
+    (project / "onshape.yml").write_text(config)
+    (project / "featurescript" / "dock.fs").write_text("FeatureScript 1234;\n")
+    return load_project(project)
+
+
+def test_placeholder_document_skips_without_touching_onshape(tmp_path):
+    project = write_project(tmp_path, PLACEHOLDER_CONFIG, "unset")
+
+    results = push_feature_studios(ExplodingClient(), project)
+
+    assert [r.status for r in results] == ["unconfigured"]
+    assert "document.id" in results[0].detail
+    assert "document.workspace" in results[0].detail
+
+
+def test_placeholder_element_skips_only_that_entry(tmp_path):
+    project = write_project(tmp_path, PLACEHOLDER_ELEMENT_ONLY, "half-set")
+
+    results = push_feature_studios(ExplodingClient(), project)
+
+    assert [r.status for r in results] == ["unconfigured"]
+    assert results[0].detail == "placeholder element id"
+
+
+def test_pull_also_skips_an_unconfigured_project(tmp_path):
+    project = write_project(tmp_path, PLACEHOLDER_CONFIG, "unset")
+
+    results = pull_exports(ExplodingClient(), project)
+
+    assert [r.status for r in results] == ["unconfigured"]

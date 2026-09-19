@@ -93,3 +93,30 @@ def test_discover_walks_a_tree_in_stable_order(tmp_path):
     write(tmp_path / "projects", VALID.replace("project: dock", "project: alpha"), name="alpha")
 
     assert [p.name for p in discover_projects(tmp_path)] == ["alpha", "dock"]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("REPLACE_WITH_DOCUMENT_ID", True),
+        ("replace_with_document_id", True),
+        ("  REPLACE_WITH_WORKSPACE_ID  ", True),
+        ("1a2b3c4d5e6f", False),
+        ("", False),
+    ],
+)
+def test_is_placeholder(value, expected):
+    from onshape_bridge.config import is_placeholder
+
+    assert is_placeholder(value) is expected
+
+
+def test_unconfigured_lists_placeholder_document_ids(tmp_path):
+    config = load_project(
+        write(tmp_path, "document:\n  id: REPLACE_WITH_DOCUMENT_ID\n  workspace: REPLACE_ME\n")
+    )
+    assert config.unconfigured == ("document.id",)
+
+
+def test_unconfigured_is_empty_once_ids_are_real(tmp_path):
+    assert load_project(write(tmp_path, VALID)).unconfigured == ()
