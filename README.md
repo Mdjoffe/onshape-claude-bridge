@@ -83,6 +83,17 @@ over tessellation. The client follows that redirect itself rather than letting
 the redirect leaves Onshape's host, since storage URLs carry their own
 authorization.
 
+Configurations are read with `get_configuration`, written with
+`update_configuration`, and turned into the strings other calls want by
+`encode_configuration`. `configuration_options()` exists for one trap: each
+option carries both an `optionName` for people ("500 mm") and an `option` for
+the API (`_500_mm`), and only the second is accepted as a value.
+
+`export_part_studio_stl` takes a `configuration`, which must be the `encodedId`
+rather than the `queryParam`. The two differ by a leading `configuration=`, and
+sending the wrong one produces a doubly-encoded parameter that Onshape reads as
+a different configuration.
+
 Metadata -- tab names, part numbers, descriptions, custom properties -- is the
 second thing in Onshape that is text, and the only other thing that could
 sensibly live in git. `element_metadata` / `part_metadata` read it and

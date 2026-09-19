@@ -235,6 +235,53 @@ class OnshapeClient:
     def get_configuration(self, ref: ElementRef) -> dict:
         return self.get_json(f"/elements/{ref.path_suffix}/configuration")
 
+    def update_configuration(self, ref: ElementRef, configuration: dict) -> dict:
+        """Rewrite a Part Studio's or Assembly's configuration definition."""
+        return self.post_json(f"/elements/{ref.path_suffix}/configuration", configuration)
+
+    @staticmethod
+    def configuration_options(configuration: dict) -> dict[str, dict[str, str]]:
+        """Parameter name -> {readable option name: the value the API accepts}.
+
+        Exists for one trap: each option carries both `optionName` ("500 mm")
+        and `option` ("_500_mm"), and only `option` is accepted as a
+        parameterValue. Reading the pretty one and sending it fails quietly.
+        """
+        mapping: dict[str, dict[str, str]] = {}
+        for parameter in configuration.get("configurationParameters") or []:
+            name = parameter.get("parameterName")
+            if not name:
+                continue
+            mapping[name] = {
+                option["optionName"]: option["option"]
+                for option in parameter.get("options") or []
+                if option.get("optionName") and option.get("option")
+            }
+        return mapping
+
+    def encode_configuration(self, ref: ElementRef, parameters: dict[str, str]) -> dict:
+        """Turn {parameterId: option} into the encoded forms other calls want.
+
+        Returns `encodedId` -- for request bodies, such as a translation -- and
+        `queryParam`, which is that same string with `configuration=` already
+        glued on the front.
+
+        Note the path carries document and element but no workspace. That is
+        Onshape's own shape, not an omission: an encoding is not workspace
+        specific.
+        """
+        return self.post_json(
+            f"/elements/d/{ref.document_id}/e/{ref.element_id}/configurationencodings",
+            {
+                "parameters": [
+                    {"parameterId": k, "parameterValue": v} for k, v in parameters.items()
+                ]
+            },
+        )
+
+    def decode_configuration(self, ref: ElementRef, encoding_id: str) -> dict:
+        return self.get_json(f"/elements/{ref.path_suffix}/configurationencodings/{encoding_id}")
+
     # -- exports (Onshape -> git) -----------------------------------------
 
     def start_translation(
@@ -428,6 +475,7 @@ class OnshapeClient:
         units: str = "millimeter",
         grouping: bool = True,
         scale: float = 1.0,
+        configuration: str | None = None,
     ) -> bytes:
         """Export a Part Studio to STL synchronously, in two metered calls.
 
@@ -436,16 +484,24 @@ class OnshapeClient:
         redirect and the fetch -- against the dozen or so a translation job
         costs in POST plus polling plus download. The trade is no control over
         tessellation beyond these arguments.
+
+        `configuration` takes the **encodedId** from `encode_configuration`, not
+        its `queryParam`. The two differ by a leading `configuration=`, and
+        passing the query-param form here produces a doubly-encoded parameter
+        that Onshape reads as a different configuration entirely.
         """
+        params: dict[str, Any] = {
+            "mode": mode,
+            "units": units,
+            "grouping": str(grouping).lower(),
+            "scale": scale,
+        }
+        if configuration:
+            params["configuration"] = configuration
         response = self.request(
             "GET",
             f"/partstudios/{ref.path_suffix}/stl",
-            params={
-                "mode": mode,
-                "units": units,
-                "grouping": str(grouping).lower(),
-                "scale": scale,
-            },
+            params=params,
             headers={"Accept": "*/*"},
         )
         return response.content

@@ -475,3 +475,73 @@ def test_a_cached_property_map_makes_a_write_one_call(monkeypatch):
 
     client.update_element_metadata(ElementRef("D", "W", "E"), {cached["Name"]: "BRACKET"})
     assert client.call_count == 2, "the write itself is one call"
+
+
+CONFIGURATION = {
+    "btType": "BTConfigurationResponse-2019",
+    "configurationParameters": [
+        {
+            "parameterId": "List_sCW2T7xBCmN6an",
+            "parameterName": "Drill_Bit_Length",
+            "defaultValue": "Default",
+            "options": [
+                {"optionName": "250 mm", "option": "Default"},
+                {"optionName": "500 mm", "option": "_500_mm"},
+            ],
+        }
+    ],
+    "libraryVersion": 2641,
+}
+
+
+def test_configuration_options_expose_the_value_the_api_wants():
+    """optionName is for people; only `option` is accepted as a value."""
+    options = OnshapeClient.configuration_options(CONFIGURATION)
+
+    assert options == {"Drill_Bit_Length": {"250 mm": "Default", "500 mm": "_500_mm"}}
+    assert options["Drill_Bit_Length"]["500 mm"] == "_500_mm"
+
+
+def test_configuration_options_tolerates_an_unconfigured_element():
+    assert OnshapeClient.configuration_options({"configurationParameters": []}) == {}
+
+
+def test_encoding_a_configuration_omits_the_workspace(monkeypatch):
+    """Onshape's own path for this endpoint carries no workspace segment."""
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.encode_configuration(ElementRef("D", "W", "E"), {"List_x": "_500_mm"})
+
+    sent = recorder.calls[0]
+    assert sent["url"].endswith("/elements/d/D/e/E/configurationencodings")
+    assert "/w/W/" not in sent["url"]
+    assert sent["json"] == {
+        "parameters": [{"parameterId": "List_x", "parameterValue": "_500_mm"}]
+    }
+
+
+def test_a_configured_export_sends_the_encoded_id_once(monkeypatch):
+    """The queryParam form would double-encode into a different configuration."""
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.export_part_studio_stl(
+        ElementRef("D", "W", "E"), configuration="List_x=_500_mm"
+    )
+
+    params = recorder.calls[0]["params"]
+    assert params["configuration"] == "List_x=_500_mm"
+    assert not params["configuration"].startswith("configuration=")
+
+
+def test_an_unconfigured_export_sends_no_configuration(monkeypatch):
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.export_part_studio_stl(ElementRef("D", "W", "E"))
+
+    assert "configuration" not in recorder.calls[0]["params"]
