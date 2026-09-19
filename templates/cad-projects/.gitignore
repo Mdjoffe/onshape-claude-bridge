@@ -1,0 +1,11 @@
+# Onshape exports are CI output, not source. Track them only if you want the
+# artifacts diffable/downloadable from the repo -- and put them in Git LFS if so.
+exports/*.step
+exports/*.stp
+exports/*.stl
+exports/*.3mf
+exports/*.iges
+
+# Slicer and OS noise
+*.gcode
+.DS_Store

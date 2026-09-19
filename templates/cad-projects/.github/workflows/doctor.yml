@@ -1,0 +1,69 @@
+name: Onshape doctor
+
+# Verifies that the repository's Onshape API credentials actually work.
+# Run it from the Actions tab: Onshape doctor -> Run workflow.
+#
+# Deliberately self-contained: stdlib only, no checkout, no pip install, no
+# dependency on the bridge repo. The point is to isolate "do the credentials
+# work" from every other moving part, so a failure here means Onshape said no.
+on:
+  workflow_dispatch:
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check the API key against Onshape
+        env:
+          ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
+          ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
+        run: |
+          python - <<'PY'
+          import base64, json, os, sys, urllib.error, urllib.request
+
+          access = os.environ.get("ONSHAPE_ACCESS_KEY", "")
+          secret = os.environ.get("ONSHAPE_SECRET_KEY", "")
+
+          missing = [n for n, v in
+                     (("ONSHAPE_ACCESS_KEY", access), ("ONSHAPE_SECRET_KEY", secret))
+                     if not v]
+          if missing:
+              print(f"::error::Missing repository secret(s): {', '.join(missing)}. "
+                    "Add them under Settings > Secrets and variables > Actions.")
+              sys.exit(1)
+
+          # Onshape accepts the API key pair as HTTP basic auth.
+          token = base64.b64encode(f"{access}:{secret}".encode()).decode()
+          request = urllib.request.Request(
+              "https://cad.onshape.com/api/users/sessioninfo",
+              headers={"Authorization": f"Basic {token}", "Accept": "application/json"},
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  info = json.load(response)
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", "replace")[:500]
+              print(f"::error::Onshape rejected the credentials: HTTP {exc.code}")
+              if exc.code in (401, 403):
+                  print("401/403 means the keys are wrong or revoked, the pair is "
+                        "mismatched, or the key lacks the scopes it needs. Re-create "
+                        "it with at least read/write on documents.")
+              print(f"response body: {body}")
+              sys.exit(1)
+          except urllib.error.URLError as exc:
+              print(f"::error::Could not reach cad.onshape.com: {exc.reason}")
+              print("The credentials were never checked.")
+              sys.exit(1)
+
+          # Nothing secret is echoed here -- only the account the key belongs to.
+          print("Onshape accepted the API key.\n")
+          for key in ("name", "email", "id", "state"):
+              if info.get(key):
+                  print(f"  {key}: {info[key]}")
+          print("\nAPI access works on this account and plan.")
+          PY
