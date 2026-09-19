@@ -6,7 +6,7 @@ allowance, so these assert cost, not just correctness.
 
 import pytest
 
-from onshape_bridge.client import OnshapeClient, OnshapeError
+from onshape_bridge.client import ElementRef, OnshapeClient, OnshapeError
 
 
 class FakeResponse:
@@ -188,3 +188,108 @@ def test_backoff_costs_far_fewer_calls_than_flat_polling(monkeypatch):
 
     assert polls_within_five_minutes <= 15
     assert 300 / 2.0 > 100  # flat 2s polling would have cost over 100
+
+
+class Recorder:
+    """Captures each hop so tests can assert on URLs and credentials sent."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls: list[dict] = []
+
+    def __call__(self, method, url, **kwargs):
+        self.calls.append({"method": method, "url": url, **kwargs})
+        return self.responses.pop(0)
+
+
+def test_a_synchronous_export_follows_its_redirect_and_counts_both_hops(monkeypatch):
+    """Onshape's sync exports 307 to the file. Both hops are metered."""
+    client = OnshapeClient("access", "secret")
+
+    class Moved(FakeResponse):
+        status_code = 307
+        headers = {"Location": "https://cad.onshape.com/api/download/abc"}
+
+    class Payload(FakeResponse):
+        content = b"solid CRANK\nendsolid\n"
+
+    recorder = Recorder([Moved(), Payload()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    data = client.export_part_studio_stl(ElementRef("D", "W", "E"))
+
+    assert data == b"solid CRANK\nendsolid\n"
+    assert client.call_count == 2, "the 307 and the fetch are both metered"
+    assert recorder.calls[1]["url"] == "https://cad.onshape.com/api/download/abc"
+
+
+def test_redirects_are_not_followed_by_requests_itself(monkeypatch):
+    """Letting requests follow would hide a metered hop from the counter."""
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.get_json("/anything")
+
+    assert recorder.calls[0]["allow_redirects"] is False
+
+
+def test_credentials_are_withheld_from_an_off_host_redirect(monkeypatch):
+    """Storage redirects carry their own auth; our API keys must not follow."""
+    client = OnshapeClient("access", "secret")
+
+    class Moved(FakeResponse):
+        status_code = 307
+        headers = {"Location": "https://files.example-cdn.com/signed/abc"}
+
+    recorder = Recorder([Moved(), FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.request("GET", "/partstudios/d/D/w/W/e/E/stl")
+
+    assert "auth" in recorder.calls[1], "must send explicit no-op auth, not None"
+    assert recorder.calls[1]["auth"] is not None
+    assert "auth" not in recorder.calls[0], "the first hop uses session credentials"
+
+
+def test_same_host_redirect_keeps_credentials(monkeypatch):
+    client = OnshapeClient("access", "secret")
+
+    class Moved(FakeResponse):
+        status_code = 307
+        headers = {"Location": "/api/elsewhere"}
+
+    recorder = Recorder([Moved(), FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.request("GET", "/somewhere")
+
+    assert "auth" not in recorder.calls[1], "session credentials still apply"
+    assert recorder.calls[1]["url"] == "https://cad.onshape.com/api/elsewhere"
+
+
+def test_a_redirect_loop_is_bounded(monkeypatch):
+    client = OnshapeClient("access", "secret")
+
+    class Loop(FakeResponse):
+        status_code = 307
+        headers = {"Location": "https://cad.onshape.com/api/round-we-go"}
+
+    monkeypatch.setattr(client._session, "request", lambda *a, **k: Loop())
+
+    client.request("GET", "/start")
+
+    assert client.call_count == 1 + client.max_redirects
+
+
+def test_translator_formats_is_one_call(monkeypatch):
+    client = OnshapeClient("access", "secret")
+
+    class Formats(FakeResponse):
+        def json(self):
+            return [{"name": "STEP", "validDestinationFormat": True}]
+
+    monkeypatch.setattr(client._session, "request", lambda *a, **k: Formats())
+
+    assert client.translator_formats()[0]["name"] == "STEP"
+    assert client.call_count == 1

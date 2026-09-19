@@ -75,6 +75,18 @@ being wrong is one needless Onshape microversion.
 Export polling backs off (2s, 4s, 8s ... capped at 30s) rather than hammering a
 flat interval, which takes a five-minute export from about 150 calls to a dozen.
 
+Cheaper still, where it fits: `export_part_studio_stl` uses Onshape's
+*synchronous* STL export, which answers with a 307 to the finished file. Two
+calls, against the dozen a translation job costs, in exchange for no control
+over tessellation. The client follows that redirect itself rather than letting
+`requests` do it, so both hops are counted -- and it withholds the API keys when
+the redirect leaves Onshape's host, since storage URLs carry their own
+authorization.
+
+`translator_formats()` lists every format Onshape will accept or produce. One
+call, and it turns a guessed `formatName` into a checked one before a
+translation is started.
+
 A project whose ids are still the scaffold's `REPLACE_WITH_...` placeholders
 reports `unconfigured` and is skipped without contacting Onshape. That is what
 lets you point one project at a real document while the rest of the repo stays

@@ -12,6 +12,7 @@ import os
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
@@ -68,6 +69,9 @@ class OnshapeClient:
         # a point; past this many seconds, fail and let the caller decide rather
         # than park a CI job for the rest of the window.
         self.max_retry_after = max_retry_after
+        # Onshape's synchronous exports redirect once. More than a couple of
+        # hops means something is wrong, and every hop costs a call.
+        self.max_redirects = 5
         # The Free plan meters calls against a small annual allowance, so every
         # metered request is counted and reported rather than left to guesswork.
         self.call_count = 0
@@ -105,8 +109,15 @@ class OnshapeClient:
         except ValueError:
             return None
 
-    def _send(self, method: str, path: str, **kwargs: Any) -> requests.Response:
-        url = f"{self.base_url}/{path.lstrip('/')}"
+    def _absolute(self, path: str) -> str:
+        if path.startswith(("http://", "https://")):
+            return path
+        return f"{self.base_url}/{path.lstrip('/')}"
+
+    def _send(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        # Redirects are followed by hand in `request`, not here: each hop is
+        # separately metered, and credentials must not travel to a new host.
+        kwargs.setdefault("allow_redirects", False)
         response = self._session.request(method, url, timeout=self.timeout, **kwargs)
 
         # Onshape meters 2xx and 3xx only; 4xx and 5xx are explicitly free. An
@@ -114,8 +125,8 @@ class OnshapeClient:
         # that a 404 proves the server did a lookup. Onshape's published limits
         # say otherwise, and counting them overstates the spend.
         #
-        # Redirects are the one gap: requests follows a 307 itself, so we see
-        # the final response and count once where Onshape metered twice.
+        # A 3xx is metered like any other answer, which is why `request` follows
+        # redirects one deliberate hop at a time: each lands here and is counted.
         if 200 <= response.status_code < 400:
             self.call_count += 1
 
@@ -130,8 +141,9 @@ class OnshapeClient:
                 pass
         return response
 
-    def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
-        response = self._send(method, path, **kwargs)
+    def _send_once(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        """One hop, with the single 429 retry Onshape's Retry-After asks for."""
+        response = self._send(method, url, **kwargs)
 
         # A 429 is a rate limit, not the annual allowance, and it costs nothing.
         # Retrying once after the wait Onshape names is usually all it takes.
@@ -139,7 +151,36 @@ class OnshapeClient:
             delay = self._retry_after(response)
             if delay is not None and 0 <= delay <= self.max_retry_after:
                 time.sleep(delay)
-                response = self._send(method, path, **kwargs)
+                response = self._send(method, url, **kwargs)
+        return response
+
+    def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
+        url = self._absolute(path)
+        response = self._send_once(method, url, **kwargs)
+
+        # Onshape's synchronous exports answer with a 307 pointing at wherever
+        # the file actually lives, and the docs say applications must follow it
+        # themselves. We do it here rather than leaving it to requests for two
+        # reasons: each hop is separately metered, so following silently would
+        # under-report the spend; and the target may be storage on another host,
+        # which carries its own authorization in the URL and must not be handed
+        # our API keys.
+        hops = 0
+        while 300 <= response.status_code < 400 and hops < self.max_redirects:
+            location = response.headers.get("Location")
+            if not location:
+                break
+            target = urljoin(url, location)
+            off_host = urlsplit(target).netloc != urlsplit(self.base_url).netloc
+            follow = dict(kwargs)
+            if off_host:
+                # A callable auth that changes nothing: requests treats None as
+                # "fall back to the session's credentials", so this is the only
+                # way to genuinely send none.
+                follow["auth"] = lambda request: request
+            response = self._send_once(method, target, **follow)
+            url = target
+            hops += 1
 
         if not response.ok:
             raise OnshapeError(
@@ -211,6 +252,46 @@ class OnshapeClient:
         if extra:
             payload.update(extra)
         return self.post_json(f"/{element_kind}/{ref.path_suffix}/translations", payload)
+
+    def translator_formats(self) -> list[dict]:
+        """Every format Onshape can translate, and in which direction.
+
+        Each entry carries `name` (what `formatName` must be set to, casing and
+        all), `validSourceFormat`, `validDestinationFormat` and
+        `couldBeAssembly`. One call, and it turns a guessed `formatName` --
+        which would fail a translation after the expensive part -- into a
+        checkable one.
+        """
+        return self.get_json("/translations/translationformats")
+
+    def export_part_studio_stl(
+        self,
+        ref: ElementRef,
+        mode: str = "binary",
+        units: str = "millimeter",
+        grouping: bool = True,
+        scale: float = 1.0,
+    ) -> bytes:
+        """Export a Part Studio to STL synchronously, in two metered calls.
+
+        Onshape offers synchronous exports for STL, Parasolid and glTF that
+        answer with a 307 to wherever the file lives. That is two calls -- the
+        redirect and the fetch -- against the dozen or so a translation job
+        costs in POST plus polling plus download. The trade is no control over
+        tessellation beyond these arguments.
+        """
+        response = self.request(
+            "GET",
+            f"/partstudios/{ref.path_suffix}/stl",
+            params={
+                "mode": mode,
+                "units": units,
+                "grouping": str(grouping).lower(),
+                "scale": scale,
+            },
+            headers={"Accept": "*/*"},
+        )
+        return response.content
 
     def translation(self, translation_id: str) -> dict:
         return self.get_json(f"/translations/{translation_id}")
