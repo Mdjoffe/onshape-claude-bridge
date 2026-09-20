@@ -215,6 +215,22 @@ class OnshapeClient:
         response = self.request("POST", path, json=payload, **kwargs)
         return response.json() if response.content else None
 
+    def delete_json(self, path: str, **kwargs: Any) -> Any:
+        """DELETE, returning whatever came back.
+
+        Deletes commonly answer 200 with a body, 204 with nothing, or 200 with
+        an empty body, so all three have to read the same to the caller.
+        """
+        response = self.request("DELETE", path, **kwargs)
+        if response.status_code == 204 or not response.content:
+            return None
+        try:
+            return response.json()
+        except ValueError:
+            # Some deletes answer with a bare string or no content type worth
+            # trusting. The status already said it worked.
+            return None
+
     # -- account ----------------------------------------------------------
 
     def session_info(self) -> dict:
@@ -447,6 +463,64 @@ class OnshapeClient:
         )
 
     # -- part studios -----------------------------------------------------
+
+    # -- creating and destroying ------------------------------------------
+    #
+    # Everything here changes state, so every one of these is metered and none
+    # of it is undoable from this side. Onshape's own version history is the
+    # undo; nothing in this client replaces it.
+    #
+    # Two of these paths are inferred rather than documented, and each says so.
+    # Probing an inferred path is free -- a wrong path answers 404 or 405, and
+    # Onshape does not meter 4xx -- so the cheap way to settle one is to call
+    # it, not to reason about it.
+
+    def create_part_studio(self, document_id: str, workspace_id: str, name: str) -> dict:
+        """Add a Part Studio tab. Documented on the Part Studios page."""
+        return self.post_json(f"/partstudios/d/{document_id}/w/{workspace_id}", {"name": name})
+
+    def create_feature_studio(self, document_id: str, workspace_id: str, name: str) -> dict:
+        """Add a Feature Studio tab.
+
+        **[inference]** By analogy with `create_part_studio`, which *is*
+        documented. The Feature Studio equivalent is not written down anywhere
+        this project has read, so treat a 404 here as the answer rather than as
+        a surprise -- and a free one.
+        """
+        return self.post_json(f"/featurestudios/d/{document_id}/w/{workspace_id}", {"name": name})
+
+    def delete_element(self, ref: ElementRef) -> Any:
+        """Delete one tab.
+
+        **[inference]** No guide this project has read documents deleting an
+        element; only deleting a whole *document* is written down. This is the
+        natural REST reading of the element path. A wrong guess costs nothing.
+
+        There is no undo. The tab and everything in it leave the workspace, and
+        only an Onshape version made beforehand brings them back.
+        """
+        return self.delete_json(f"/elements/{ref.path_suffix}")
+
+    def add_feature(self, ref: ElementRef, feature: dict) -> dict:
+        """Append one feature to a Part Studio's tree.
+
+        `feature` is a `BTMFeature-134` body; the call wraps whatever it is
+        given. The response carries the new feature's `featureId`, which is the
+        only way to learn it.
+        """
+        return self.post_json(f"/partstudios/{ref.path_suffix}/features", feature)
+
+    def delete_feature(self, ref: ElementRef, feature_id: str) -> Any:
+        """Remove one feature from a Part Studio's tree.
+
+        Documented on the Part Studios page as `DELETE` on the same path that
+        updates a feature.
+
+        Order matters and this does not manage it: deleting a feature that a
+        later one consumes leaves the later one in error. Walk the tree
+        backwards.
+        """
+        return self.delete_json(f"/partstudios/{ref.path_suffix}/features/featureid/{feature_id}")
 
     def part_studio_features(
         self,

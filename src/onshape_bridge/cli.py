@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from importlib import metadata
 import re
 import sys
 from pathlib import Path
@@ -12,7 +13,7 @@ import requests
 
 from .client import OnshapeClient, OnshapeError
 from .config import ConfigError, discover_projects, load_project
-from .sync import SyncResult, pull_exports, push_feature_studios
+from .sync import SyncResult, pull_exports, push_feature_studios, tag_version
 
 
 def _load(path: Path):
@@ -129,9 +130,14 @@ def cmd_push(args: argparse.Namespace) -> int:
     client = OnshapeClient.from_env(args.base_url)
     results: list[SyncResult] = []
     for project in _load(args.path):
-        results += push_feature_studios(
+        pushed = push_feature_studios(
             client, project, dry_run=args.dry_run, assume_changed=args.assume_changed
         )
+        results += pushed
+        if args.tag_version and not args.dry_run:
+            tagged = tag_version(client, project, args.tag_version, pushed)
+            if tagged is not None:
+                results.append(tagged)
     return _report(results, client, args.capture)
 
 
@@ -153,6 +159,25 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_line() -> str:
+    """Which build is actually running, and from where.
+
+    Twice now this project has run code that was not the code it thought it was
+    running: a devcontainer on a week-old install, and a non-editable
+    `pip install .` shadowing `src/`. Both passed, which is what made them
+    expensive. The content repo installs this package from `@main` on every
+    sync, so a stale copy is always possible and is never announced.
+
+    Printing the path is the whole fix. It turns "am I running what I think"
+    from something you have to remember to check into something you can see.
+    """
+    try:
+        installed = metadata.version("onshape-bridge")
+    except metadata.PackageNotFoundError:
+        installed = "not installed (running from a source tree)"
+    return f"onshape-bridge {installed}\n  imported from: {Path(__file__).resolve().parent}"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="onshape-bridge",
@@ -162,6 +187,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--base-url",
         default=None,
         help="Override the API base URL (default: $ONSHAPE_BASE_URL or cad.onshape.com/api/v10)",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=_build_line(),
+        help="which build of the bridge is installed, and where it was imported from",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -189,6 +220,14 @@ def build_parser() -> argparse.ArgumentParser:
                 "call's output survives the CI log that printed it",
             )
         if func is cmd_push:
+            sub.add_argument(
+                "--tag-version",
+                default=None,
+                metavar="NAME",
+                help="after pushing, create an Onshape version with this name "
+                "(1 call, skipped when nothing changed). Naming it after the "
+                "commit is what ties the two histories together",
+            )
             sub.add_argument(
                 "--assume-changed",
                 action="store_true",

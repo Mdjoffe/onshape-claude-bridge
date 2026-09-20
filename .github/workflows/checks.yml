@@ -32,8 +32,10 @@ jobs:
           pip install --quiet .
           pip install --quiet pytest
 
+      # Not -q: the header says which copy of the package was imported, and a
+      # non-editable install shadowing src/ is the failure mode worth seeing.
       - name: Tests
-        run: python -m pytest tests -q
+        run: python -m pytest tests
 
       # Installing is not the same as being importable under the console entry
       # point, and that is exactly how the content repo invokes this.
