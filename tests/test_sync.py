@@ -1,11 +1,13 @@
 from pathlib import Path
 
+from onshape_bridge.client import ElementRef
 from onshape_bridge.config import load_project
 from onshape_bridge.sync import (
     SyncResult,
     pull_exports,
     push_feature_studios,
     response_shape,
+    restore_feature_studio,
     tag_version,
 )
 
@@ -365,3 +367,76 @@ def test_no_version_when_nothing_changed(tmp_path):
 def test_a_version_can_be_forced_without_consulting_results(tmp_path):
     client = ExportClient()
     assert tag_version(client, export_project(tmp_path), "release 1", None) is not None
+
+
+# -- rollback from a version -----------------------------------------------
+
+
+class VersionClient(FakeClient):
+    """Serves different source for the workspace and for a version."""
+
+    def __init__(self, at_version="old source", in_workspace="new source"):
+        super().__init__()
+        self.at_version = at_version
+        self.in_workspace = in_workspace
+        self.reads: list[str] = []
+
+    def get_feature_studio_contents(self, ref):
+        self.reads.append(ref.path_suffix)
+        return self.at_version if ref.wvm == "v" else self.in_workspace
+
+
+def test_restore_reads_the_version_and_writes_the_workspace():
+    client = VersionClient()
+    ref = ElementRef("DOC", "WS", "EL")
+
+    result = restore_feature_studio(client, ref, "V1")
+
+    assert client.reads == ["d/DOC/v/V1/e/EL"]
+    assert client.updates == [("EL", "old source")]
+    assert result.status == "updated"
+
+
+def test_restore_costs_two_reads_only_when_asked_to_compare():
+    client = VersionClient()
+    restore_feature_studio(client, ElementRef("DOC", "WS", "EL"), "V1", compare=True)
+    assert client.reads == ["d/DOC/v/V1/e/EL", "d/DOC/w/WS/e/EL"]
+
+
+def test_restore_is_a_noop_when_comparing_and_already_there():
+    client = VersionClient(at_version="same", in_workspace="same")
+    result = restore_feature_studio(client, ElementRef("DOC", "WS", "EL"), "V1", compare=True)
+    assert result.status == "unchanged"
+    assert client.updates == []
+
+
+def test_restore_writes_blind_without_compare_even_if_identical():
+    """Two calls, and a needless microversion, is the stated trade."""
+    client = VersionClient(at_version="same", in_workspace="same")
+    restore_feature_studio(client, ElementRef("DOC", "WS", "EL"), "V1")
+    assert client.updates == [("EL", "same")]
+
+
+def test_dry_run_reads_the_version_but_writes_nothing():
+    client = VersionClient()
+    result = restore_feature_studio(client, ElementRef("DOC", "WS", "EL"), "V1", dry_run=True)
+    assert result.status == "would-update"
+    assert client.updates == []
+
+
+# -- immutable refs --------------------------------------------------------
+
+
+def test_a_version_ref_addresses_v_not_w():
+    assert ElementRef("D", "W", "E").at_version("V").path_suffix == "d/D/v/V/e/E"
+
+
+def test_a_microversion_ref_addresses_m():
+    assert ElementRef("D", "W", "E").at_microversion("M").path_suffix == "d/D/m/M/e/E"
+
+
+def test_only_a_workspace_is_writable():
+    ref = ElementRef("D", "W", "E")
+    assert ref.writable
+    assert not ref.at_version("V").writable
+    assert not ref.at_microversion("M").writable
