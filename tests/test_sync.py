@@ -1,7 +1,13 @@
 from pathlib import Path
 
 from onshape_bridge.config import load_project
-from onshape_bridge.sync import pull_exports, push_feature_studios, response_shape
+from onshape_bridge.sync import (
+    SyncResult,
+    pull_exports,
+    push_feature_studios,
+    response_shape,
+    tag_version,
+)
 
 CONFIG = """
 project: dock
@@ -251,3 +257,111 @@ def test_a_result_line_is_unchanged_when_nothing_came_back(tmp_path):
     client = FakeClient(remote_contents="stale")
 
     assert str(push_feature_studios(client, project)[0]).endswith("featurescript/dock.fs")
+
+
+# -- export routing --------------------------------------------------------
+
+
+class ExportClient(FakeClient):
+    """Records which export path a pull took."""
+
+    def __init__(self):
+        super().__init__()
+        self.route: list[str] = []
+        self.versions: list[tuple[str, str, str]] = []
+
+    def export_part_studio_stl(self, ref, **kwargs):
+        self.route.append("synchronous")
+        self.stl_kwargs = kwargs
+        return b"solid"
+
+    def start_translation(self, ref, fmt, **kwargs):
+        self.route.append("translation")
+        return {"id": "JOB"}
+
+    def wait_for_translation(self, job_id):
+        return {"resultExternalDataIds": ["FID"]}
+
+    def download_external_data(self, document_id, foreign_id):
+        return b"solid"
+
+    def create_version(self, document_id, workspace_id, name):
+        self.versions.append((document_id, workspace_id, name))
+        return {"id": "V1"}
+
+
+EXPORTS = """
+project: dock
+document:
+  id: DOC123
+  workspace: WS456
+exports:
+  - element: EL789
+    kind: partstudios
+    format: {fmt}
+    output: exports/out.{ext}
+{options}
+"""
+
+
+def export_project(tmp_path, fmt="STL", ext="stl", options=""):
+    project = tmp_path / "dock"
+    project.mkdir(parents=True)
+    (project / "onshape.yml").write_text(
+        EXPORTS.format(fmt=fmt, ext=ext, options=options)
+    )
+    return load_project(project)
+
+
+def test_stl_takes_the_two_call_synchronous_path(tmp_path):
+    client = ExportClient()
+    results = pull_exports(client, export_project(tmp_path))
+    assert client.route == ["synchronous"]
+    assert "synchronous" in results[0].detail
+
+
+def test_step_still_takes_the_translation_job(tmp_path):
+    """Only some formats have a synchronous endpoint; STEP is not one."""
+    client = ExportClient()
+    pull_exports(client, export_project(tmp_path, fmt="STEP", ext="step"))
+    assert client.route == ["translation"]
+
+
+def test_a_tessellation_option_buys_back_the_expensive_path(tmp_path):
+    """Asking for a tolerance and silently not getting it is worse than paying."""
+    client = ExportClient()
+    options = "    options:\n      chordTolerance: 0.01\n"
+    pull_exports(client, export_project(tmp_path, options=options))
+    assert client.route == ["translation"]
+
+
+def test_plain_stl_options_do_not_force_the_expensive_path(tmp_path):
+    client = ExportClient()
+    options = "    options:\n      mode: binary\n      units: millimeter\n"
+    pull_exports(client, export_project(tmp_path, options=options))
+    assert client.route == ["synchronous"]
+    assert client.stl_kwargs == {"mode": "binary", "units": "millimeter"}
+
+
+# -- version tagging -------------------------------------------------------
+
+
+def test_a_version_is_created_when_something_was_pushed(tmp_path):
+    client = ExportClient()
+    pushed = [SyncResult("dock", "push", "a.fs", "updated")]
+    result = tag_version(client, export_project(tmp_path), "commit abc123", pushed)
+    assert client.versions == [("DOC123", "WS456", "commit abc123")]
+    assert result.status == "created" and result.detail == "V1"
+
+
+def test_no_version_when_nothing_changed(tmp_path):
+    """Versions are immutable and accumulate forever; an empty one is waste."""
+    client = ExportClient()
+    unchanged = [SyncResult("dock", "push", "a.fs", "unchanged")]
+    assert tag_version(client, export_project(tmp_path), "commit abc", unchanged) is None
+    assert client.versions == []
+
+
+def test_a_version_can_be_forced_without_consulting_results(tmp_path):
+    client = ExportClient()
+    assert tag_version(client, export_project(tmp_path), "release 1", None) is not None

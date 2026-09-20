@@ -10,6 +10,7 @@ own versions and branches are the history for that.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .client import OnshapeClient
 from .config import ProjectConfig, is_placeholder
@@ -131,6 +132,63 @@ def push_feature_studios(
     return results
 
 
+def tag_version(
+    client: OnshapeClient,
+    project: ProjectConfig,
+    name: str,
+    results: list[SyncResult] | None = None,
+) -> SyncResult | None:
+    """Name an Onshape version after the commit that produced it. 1 call.
+
+    This is the only thing that ties the two histories together. git holds the
+    FeatureScript; Onshape holds the geometry, the versions and everything
+    drawn by hand. Neither can reconstruct the other, so without a shared name
+    "which FeatureScript made this part?" has no answer at all.
+
+    Returns None when nothing was written. A version of a workspace nothing
+    changed is a call spent recording that nothing happened, and versions are
+    immutable, so the document accumulates them forever.
+    """
+    if results is not None and not any(r.status == "updated" for r in results):
+        return None
+    response = client.create_version(project.document_id, project.workspace_id, name)
+    return SyncResult(
+        project.name,
+        "version",
+        name,
+        "created",
+        (response or {}).get("id", ""),
+        response=response if isinstance(response, dict) else None,
+    )
+
+
+#: Formats Onshape will export synchronously, answering with a redirect to the
+#: finished file instead of running a translation job. Two calls against about
+#: a dozen. STL is the only one the config schema can currently ask for; the
+#: others are here because the endpoint takes them and the next format added
+#: should not have to rediscover that.
+SYNCHRONOUS_FORMATS = {"STL"}
+
+
+def _export_route(sync: Any) -> str:
+    """Which export path this one should take, and why it is not automatic.
+
+    The synchronous export is six times cheaper but gives up control over
+    tessellation: no chord tolerance, no angle tolerance, no per-face control.
+    So it is the default for the formats that support it, and any export that
+    sets a tessellation option is sent the expensive way instead -- asking for
+    a tolerance and silently not getting it is worse than paying for it.
+    """
+    if sync.format_name.upper() not in SYNCHRONOUS_FORMATS:
+        return "translation"
+    if sync.element_kind != "partstudios":
+        return "translation"
+    tessellation = {"angleTolerance", "chordTolerance", "maximumChordLength", "resolution"}
+    if tessellation & set(sync.options or {}):
+        return "translation"
+    return "synchronous"
+
+
 def pull_exports(
     client: OnshapeClient, project: ProjectConfig, dry_run: bool = False
 ) -> list[SyncResult]:
@@ -153,19 +211,32 @@ def pull_exports(
             continue
 
         ref = project.ref(sync.element_id)
-        job = client.start_translation(
-            ref, sync.format_name, element_kind=sync.element_kind, extra=sync.options
-        )
-        finished = client.wait_for_translation(job["id"])
-
-        foreign_ids = finished.get("resultExternalDataIds") or []
-        if not foreign_ids:
-            results.append(
-                SyncResult(project.name, "pull", target, "skipped", "translation returned no data")
+        route = _export_route(sync)
+        if route == "synchronous":
+            data = client.export_part_studio_stl(
+                ref,
+                mode=str(sync.options.get("mode", "binary")),
+                units=str(sync.options.get("units", "millimeter")),
             )
-            continue
+            cost = "2 calls, synchronous"
+        else:
+            job = client.start_translation(
+                ref, sync.format_name, element_kind=sync.element_kind, extra=sync.options
+            )
+            finished = client.wait_for_translation(job["id"])
 
-        data = client.download_external_data(project.document_id, foreign_ids[0])
+            foreign_ids = finished.get("resultExternalDataIds") or []
+            if not foreign_ids:
+                results.append(
+                    SyncResult(
+                        project.name, "pull", target, "skipped", "translation returned no data"
+                    )
+                )
+                continue
+
+            data = client.download_external_data(project.document_id, foreign_ids[0])
+            cost = "translation job"
+
         destination = project.output_path(sync)
         destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -175,6 +246,6 @@ def pull_exports(
 
         destination.write_bytes(data)
         results.append(
-            SyncResult(project.name, "pull", target, "updated", f"{len(data)} bytes")
+            SyncResult(project.name, "pull", target, "updated", f"{len(data)} bytes, {cost}")
         )
     return results
