@@ -740,3 +740,63 @@ def test_a_delete_answering_unparseable_content_does_not_raise():
     """Some deletes answer with a bare string. The status already said it worked."""
     client = RecordingClient(status=200, body=b"deleted")
     assert client.delete_element(REF) is None
+
+
+# -- keeping a tree the same size across re-runs ---------------------------
+
+
+FEATURE = {
+    "btType": "BTFeatureDefinitionCall-1406",
+    "feature": {"btType": "BTMFeature-134", "featureType": "extrude", "name": "Extrude 1"},
+}
+
+
+def test_update_feature_targets_the_feature_id():
+    client = RecordingClient()
+    client.update_feature(REF, "FID", FEATURE)
+    assert client.sent == [("POST", "/partstudios/d/DOC/w/WS/e/EL/features/featureid/FID")]
+
+
+def test_update_feature_refuses_a_body_missing_featureType():
+    """Onshape blanks omitted fields rather than leaving them; that is unrecoverable."""
+    client = RecordingClient()
+    body = {"feature": {"btType": "BTMFeature-134", "name": "Extrude 1"}}
+    with pytest.raises(ValueError, match="featureType"):
+        client.update_feature(REF, "FID", body)
+    assert client.sent == []
+
+
+def test_update_feature_refuses_a_body_missing_name():
+    client = RecordingClient()
+    body = {"feature": {"btType": "BTMFeature-134", "featureType": "extrude"}}
+    with pytest.raises(ValueError, match="name"):
+        client.update_feature(REF, "FID", body)
+    assert client.sent == []
+
+
+def test_update_feature_reads_through_a_message_wrapper():
+    client = RecordingClient()
+    wrapped = {"feature": {"message": {"featureType": "extrude", "name": "Extrude 1"}}}
+    client.update_feature(REF, "FID", wrapped)
+    assert len(client.sent) == 1
+
+
+def test_the_rollback_bar_moves_without_deleting():
+    client = RecordingClient()
+    client.move_rollback_bar(REF, 3)
+    assert client.sent == [("POST", "/partstudios/d/DOC/w/WS/e/EL/features/rollback")]
+    assert client.last_json == {"rollbackIndex": 3}
+
+
+def test_a_version_ref_cannot_be_written_to():
+    client = RecordingClient()
+    for call in (
+        lambda: client.update_feature(REF.at_version("V"), "F", FEATURE),
+        lambda: client.delete_feature(REF.at_version("V"), "F"),
+        lambda: client.add_feature(REF.at_version("V"), FEATURE),
+        lambda: client.delete_element(REF.at_version("V")),
+        lambda: client.move_rollback_bar(REF.at_version("V"), 0),
+    ):
+        with pytest.raises(ValueError, match="immutable"):
+            call()
+    assert client.sent == []

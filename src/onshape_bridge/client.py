@@ -551,6 +551,44 @@ class OnshapeClient:
         _require_writable(ref, "add a feature")
         return self.post_json(f"/partstudios/{ref.path_suffix}/features", feature)
 
+    def update_feature(self, ref: ElementRef, feature_id: str, feature: dict) -> dict:
+        """Rewrite one feature in place, leaving the tree the same size.
+
+        This is what keeps a repeatable build from growing the tree. Adding is
+        one call and appends a node; updating is one call and does not. Over a
+        build re-run ten times the difference is ten nodes against nought.
+
+        **Gotcha, stated by Onshape's own guide:** the body must resend
+        `featureType` and `name`. "If we don't send those fields, the call will
+        attempt to change these values to empty strings, resulting in errors."
+        This checks before spending the call, because the failure is a mangled
+        feature rather than a clean rejection.
+        """
+        _require_writable(ref, "update a feature")
+        body = feature.get("feature", feature)
+        inner = body.get("message", body) if isinstance(body, dict) else {}
+        missing = [key for key in ("featureType", "name") if not inner.get(key)]
+        if missing:
+            raise ValueError(
+                f"updating a feature must resend {' and '.join(missing)}; "
+                "Onshape sets omitted fields to empty strings rather than leaving them"
+            )
+        return self.post_json(
+            f"/partstudios/{ref.path_suffix}/features/featureid/{feature_id}", feature
+        )
+
+    def move_rollback_bar(self, ref: ElementRef, index: int) -> dict:
+        """Suppress everything after `index`. 1 call, and nothing is deleted.
+
+        Worth knowing for what it is *not*: this hides features, it does not
+        remove them. A tree rolled back is the same size as a tree that was
+        not. Useful for isolating a failure; useless against bloat.
+        """
+        _require_writable(ref, "move the rollback bar")
+        return self.post_json(
+            f"/partstudios/{ref.path_suffix}/features/rollback", {"rollbackIndex": index}
+        )
+
     def delete_feature(self, ref: ElementRef, feature_id: str) -> Any:
         """Remove one feature from a Part Studio's tree.
 
