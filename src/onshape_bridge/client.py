@@ -51,15 +51,48 @@ class OnshapeError(RuntimeError):
 
 @dataclass(frozen=True)
 class ElementRef:
-    """Points at one element (tab) inside an Onshape document workspace."""
+    """Points at one element (tab) inside an Onshape document.
+
+    Onshape addresses an element three ways, and the path carries which:
+    `w/` a workspace, `v/` a version, `m/` a microversion. Only the workspace
+    is mutable, so only it can be written to -- and only it can go stale.
+    Anything read at `v/` or `m/` is fixed forever, which is what makes a
+    version a usable rollback source and a permanently valid cache key.
+
+    `wvm` defaults to the workspace, because that is what every caller before
+    this wanted and what every write still needs.
+    """
 
     document_id: str
     workspace_id: str
     element_id: str
+    #: "w" workspace, "v" version, "m" microversion.
+    wvm: str = "w"
 
     @property
     def path_suffix(self) -> str:
-        return f"d/{self.document_id}/w/{self.workspace_id}/e/{self.element_id}"
+        return f"d/{self.document_id}/{self.wvm}/{self.workspace_id}/e/{self.element_id}"
+
+    @property
+    def writable(self) -> bool:
+        """Versions and microversions are immutable; only a workspace is not."""
+        return self.wvm == "w"
+
+    def at_version(self, version_id: str) -> "ElementRef":
+        """The same element as it was at a version. Read-only, never stale."""
+        return ElementRef(self.document_id, version_id, self.element_id, wvm="v")
+
+    def at_microversion(self, microversion_id: str) -> "ElementRef":
+        """The same element at one exact change. Read-only, never stale."""
+        return ElementRef(self.document_id, microversion_id, self.element_id, wvm="m")
+
+
+def _require_writable(ref: ElementRef, what: str) -> None:
+    if not ref.writable:
+        raise ValueError(
+            f"cannot {what} at {ref.wvm}/{ref.workspace_id}: versions and "
+            "microversions are immutable. Write to the workspace instead."
+        )
 
 
 class OnshapeClient:
@@ -332,7 +365,13 @@ class OnshapeClient:
         return self.get_feature_studio(ref).get("contents", "")
 
     def update_feature_studio_contents(self, ref: ElementRef, contents: str) -> dict:
-        """Overwrite a Feature Studio's source. This is the git -> Onshape push."""
+        """Overwrite a Feature Studio's source. This is the git -> Onshape push.
+
+        Refuses a version or microversion ref before spending anything. Onshape
+        would reject it too, but its error is about the route rather than about
+        the mistake, and this one costs no call to produce.
+        """
+        _require_writable(ref, "write a Feature Studio")
         return self.post_json(f"/featurestudios/{ref.path_suffix}", {"contents": contents})
 
     # -- configurations ---------------------------------------------------
@@ -499,6 +538,7 @@ class OnshapeClient:
         There is no undo. The tab and everything in it leave the workspace, and
         only an Onshape version made beforehand brings them back.
         """
+        _require_writable(ref, "delete an element")
         return self.delete_json(f"/elements/{ref.path_suffix}")
 
     def add_feature(self, ref: ElementRef, feature: dict) -> dict:
@@ -508,6 +548,7 @@ class OnshapeClient:
         given. The response carries the new feature's `featureId`, which is the
         only way to learn it.
         """
+        _require_writable(ref, "add a feature")
         return self.post_json(f"/partstudios/{ref.path_suffix}/features", feature)
 
     def delete_feature(self, ref: ElementRef, feature_id: str) -> Any:
@@ -520,6 +561,7 @@ class OnshapeClient:
         later one consumes leaves the later one in error. Walk the tree
         backwards.
         """
+        _require_writable(ref, "delete a feature")
         return self.delete_json(f"/partstudios/{ref.path_suffix}/features/featureid/{feature_id}")
 
     def part_studio_features(

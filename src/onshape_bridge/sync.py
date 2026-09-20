@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .client import OnshapeClient
+from .client import ElementRef, OnshapeClient
 from .config import ProjectConfig, is_placeholder
 
 
@@ -130,6 +130,49 @@ def push_feature_studios(
             )
         )
     return results
+
+
+def restore_feature_studio(
+    client: OnshapeClient,
+    ref: ElementRef,
+    version_id: str,
+    dry_run: bool = False,
+    compare: bool = False,
+) -> SyncResult:
+    """Put a Feature Studio back to how it was at a version.
+
+    **2 calls**, or 3 with `compare`. This is rollback using nothing we have
+    not already proven: a version is immutable, so reading the element at
+    `v/{vid}` gives exactly the source that was there, and writing it to the
+    workspace is the same call `push` already makes. No restore endpoint, no
+    branch, nothing left to verify.
+
+    `compare` spends a third call reading the workspace first, and buys only
+    the avoidance of a needless microversion when the rollback is a no-op.
+    That is the same trade as `--assume-changed` and it defaults the same way:
+    off, because a rollback is something you asked for deliberately and the
+    usual case is that it will change something.
+
+    It does not roll back *geometry*. Hand-drawn work and feature trees are not
+    text and do not come back this way -- for those Onshape's own restore is
+    the only route, and this project has not established what that costs.
+    """
+    source = client.get_feature_studio_contents(ref.at_version(version_id))
+    if dry_run:
+        return SyncResult(
+            "", "restore", ref.element_id, "would-update", f"{len(source)} bytes from {version_id}"
+        )
+    if compare and source == client.get_feature_studio_contents(ref):
+        return SyncResult("", "restore", ref.element_id, "unchanged", f"already at {version_id}")
+    response = client.update_feature_studio_contents(ref, source)
+    return SyncResult(
+        "",
+        "restore",
+        ref.element_id,
+        "updated",
+        f"from {version_id}",
+        response=response if isinstance(response, dict) else None,
+    )
 
 
 def tag_version(
