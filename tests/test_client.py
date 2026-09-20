@@ -5,6 +5,7 @@ allowance, so these assert cost, not just correctness.
 """
 
 import pytest
+import requests
 
 from onshape_bridge.client import ElementRef, OnshapeClient, OnshapeError
 
@@ -666,3 +667,76 @@ def test_an_explicit_base_url_still_wins():
     client = OnshapeClient("access", "secret", base_url="https://cad.onshape.com/api/v16")
 
     assert client.base_url == "https://cad.onshape.com/api/v16"
+
+
+# -- creating and destroying ----------------------------------------------
+#
+# These are the first methods here that destroy anything, so the tests pin the
+# verb and the path rather than just the happy path: a DELETE sent to the wrong
+# URL is not a failed call, it is a deleted something-else.
+
+
+class RecordingClient(OnshapeClient):
+    """Captures the request instead of sending it."""
+
+    def __init__(self, status=200, body=b'{"ok": true}'):
+        super().__init__("key", "secret")
+        self.sent: list[tuple[str, str]] = []
+        self._status = status
+        self._body = body
+
+    def request(self, method, path, **kwargs):
+        self.sent.append((method, path))
+        self.last_json = kwargs.get("json")
+        response = requests.Response()
+        response.status_code = self._status
+        response._content = self._body
+        response.headers["Content-Type"] = "application/json"
+        return response
+
+
+REF = ElementRef("DOC", "WS", "EL")
+
+
+def test_delete_element_uses_delete_on_the_element_path():
+    client = RecordingClient()
+    client.delete_element(REF)
+    assert client.sent == [("DELETE", "/elements/d/DOC/w/WS/e/EL")]
+
+
+def test_delete_feature_targets_one_feature_id():
+    client = RecordingClient()
+    client.delete_feature(REF, "FID")
+    assert client.sent == [("DELETE", "/partstudios/d/DOC/w/WS/e/EL/features/featureid/FID")]
+
+
+def test_add_feature_posts_the_body_unchanged():
+    client = RecordingClient()
+    body = {"btType": "BTFeatureDefinitionCall-1406", "feature": {}}
+    client.add_feature(REF, body)
+    assert client.sent == [("POST", "/partstudios/d/DOC/w/WS/e/EL/features")]
+    assert client.last_json == body
+
+
+def test_create_feature_studio_posts_to_the_workspace_not_an_element():
+    client = RecordingClient()
+    client.create_feature_studio("DOC", "WS", "sphere")
+    assert client.sent == [("POST", "/featurestudios/d/DOC/w/WS")]
+    assert client.last_json == {"name": "sphere"}
+
+
+def test_create_part_studio_posts_to_the_workspace():
+    client = RecordingClient()
+    client.create_part_studio("DOC", "WS", "parts")
+    assert client.sent == [("POST", "/partstudios/d/DOC/w/WS")]
+
+
+def test_a_delete_answering_204_reads_as_no_body():
+    client = RecordingClient(status=204, body=b"")
+    assert client.delete_element(REF) is None
+
+
+def test_a_delete_answering_unparseable_content_does_not_raise():
+    """Some deletes answer with a bare string. The status already said it worked."""
+    client = RecordingClient(status=200, body=b"deleted")
+    assert client.delete_element(REF) is None
