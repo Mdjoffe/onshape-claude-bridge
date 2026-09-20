@@ -627,3 +627,42 @@ def test_creating_a_version_repeats_the_document_id(monkeypatch):
     sent = recorder.calls[0]
     assert sent["url"].endswith("/documents/d/D/versions")
     assert sent["json"] == {"documentId": "D", "workspaceId": "W", "name": "commit 9ee2cd6"}
+
+
+# -- the API version is pinned, not inherited -----------------------------
+
+
+def test_the_default_base_url_names_a_version():
+    """An unversioned URL resolves to whatever Onshape calls oldest."""
+    from onshape_bridge.client import DEFAULT_API_VERSION, DEFAULT_BASE_URL
+
+    assert DEFAULT_BASE_URL.endswith(f"/api/{DEFAULT_API_VERSION}")
+    assert DEFAULT_API_VERSION.startswith("v")
+
+
+def test_the_pinned_version_rejects_rather_than_repairs():
+    """From v10, configuration endpoints 400 instead of silently repairing.
+
+    A rejection is free; a silent repair is a wrong result that costs a call
+    and does not announce itself.
+    """
+    from onshape_bridge.client import DEFAULT_API_VERSION
+
+    assert int(DEFAULT_API_VERSION.lstrip("v")) >= 10
+
+
+def test_requests_go_to_the_pinned_version(monkeypatch):
+    client = OnshapeClient("access", "secret")
+    recorder = Recorder([FakeResponse()])
+    monkeypatch.setattr(client._session, "request", recorder)
+
+    client.get_json("/users/sessioninfo")
+
+    assert recorder.calls[0]["url"] == "https://cad.onshape.com/api/v10/users/sessioninfo"
+
+
+def test_an_explicit_base_url_still_wins():
+    """Moving to another version must not need a code change."""
+    client = OnshapeClient("access", "secret", base_url="https://cad.onshape.com/api/v16")
+
+    assert client.base_url == "https://cad.onshape.com/api/v16"
