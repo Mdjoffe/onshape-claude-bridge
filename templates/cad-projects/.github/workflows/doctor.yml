@@ -39,7 +39,7 @@ jobs:
           # Onshape accepts the API key pair as HTTP basic auth.
           token = base64.b64encode(f"{access}:{secret}".encode()).decode()
           request = urllib.request.Request(
-              "https://cad.onshape.com/api/users/sessioninfo",
+              "https://cad.onshape.com/api/v10/users/sessioninfo",
               headers={"Authorization": f"Basic {token}", "Accept": "application/json"},
           )
 

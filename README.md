@@ -55,6 +55,15 @@ Both sync directions compare before writing: identical content reports
 `unchanged` and makes no API call, so re-running in CI creates no Onshape
 microversions and no empty git diffs.
 
+Calls go to **`/api/v10`** by default rather than to an unversioned path.
+Onshape resolves an unversioned URL to whatever it considers oldest -- measured
+as `v1`, though the docs claim `v0` -- which is a moving target nobody chose.
+From v10 onward, configuration endpoints reject bad visibility conditions with
+a 400 instead of silently repairing them, and failing is the cheaper outcome:
+Onshape does not meter 4xx, so a rejection costs nothing while a silent repair
+costs a wrong result you may not notice. Override with `ONSHAPE_BASE_URL` or
+`--base-url`.
+
 Every run reports `Onshape API calls this run: N` as its last line, alongside
 the API version the server answered as and how many calls that endpoint has left
 in its rate-limit window. The Onshape Free plan meters 2500 calls per user per

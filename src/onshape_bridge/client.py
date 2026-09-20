@@ -16,7 +16,17 @@ from urllib.parse import urljoin, urlsplit
 
 import requests
 
-DEFAULT_BASE_URL = "https://cad.onshape.com/api"
+# Onshape versions its API in the path. An unversioned URL does not mean
+# "current" -- it resolves to whatever Onshape considers oldest, which was
+# measured as v1 on 2026-09-19 despite the docs saying v0. That is a moving
+# target nobody chose, so pin one.
+#
+# v10 rather than the newest: from v10 onward, configuration endpoints reject
+# bad visibility conditions with a 400 instead of silently repairing them.
+# Failing is the cheaper outcome -- Onshape does not meter 4xx, so a rejection
+# costs nothing while a silent repair costs a wrong result you may not notice.
+DEFAULT_API_VERSION = "v10"
+DEFAULT_BASE_URL = f"https://cad.onshape.com/api/{DEFAULT_API_VERSION}"
 
 
 class OnshapeError(RuntimeError):
@@ -76,8 +86,9 @@ class OnshapeClient:
         # metered request is counted and reported rather than left to guesswork.
         self.call_count = 0
         # Read back off the responses, so a run can report what it was talking
-        # to. X-Api-Version settles which API version an unversioned base URL
-        # actually resolved to, and costs nothing to observe.
+        # to. With a pinned base URL this should echo the version asked for --
+        # if it ever does not, that version has been retired and the difference
+        # is worth seeing rather than discovering through changed behaviour.
         self.api_version: str | None = None
         self.rate_limit_remaining: int | None = None
         self._session = requests.Session()

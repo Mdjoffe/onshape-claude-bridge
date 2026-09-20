@@ -140,7 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--base-url",
         default=None,
-        help="Override the API base URL (default: $ONSHAPE_BASE_URL or cad.onshape.com/api)",
+        help="Override the API base URL (default: $ONSHAPE_BASE_URL or cad.onshape.com/api/v10)",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
