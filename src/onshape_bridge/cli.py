@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -95,11 +97,30 @@ def cmd_elements(args: argparse.Namespace) -> int:
     return 0
 
 
-def _report(results: list[SyncResult], client: OnshapeClient) -> int:
+def _capture(results: list[SyncResult], directory: Path) -> None:
+    """Write each write-response to a file, so nothing a call returned is lost.
+
+    A metered call spends part of a yearly allowance, and its response cannot
+    be had again for free. Printing it to a CI log is not keeping it: logs
+    expire. So the bytes go to a file the caller can commit.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    for result in results:
+        if result.response is None:
+            continue
+        stem = re.sub(r"[^A-Za-z0-9]+", "-", f"{result.project}-{result.target}").strip("-")
+        path = directory / f"{stem}.json"
+        path.write_text(json.dumps(result.response, indent=2, sort_keys=True) + "\n")
+        print(f"  captured {path}")
+
+
+def _report(results: list[SyncResult], client: OnshapeClient, capture: Path | None = None) -> int:
     for result in results:
         print(result)
     if not results:
         print("nothing configured to sync")
+    if capture is not None:
+        _capture(results, capture)
     _report_usage(client)
     return 0
 
@@ -111,7 +132,7 @@ def cmd_push(args: argparse.Namespace) -> int:
         results += push_feature_studios(
             client, project, dry_run=args.dry_run, assume_changed=args.assume_changed
         )
-    return _report(results, client)
+    return _report(results, client, args.capture)
 
 
 def cmd_pull(args: argparse.Namespace) -> int:
@@ -119,7 +140,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
     results: list[SyncResult] = []
     for project in _load(args.path):
         results += pull_exports(client, project, dry_run=args.dry_run)
-    return _report(results, client)
+    return _report(results, client, args.capture)
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -159,6 +180,13 @@ def build_parser() -> argparse.ArgumentParser:
         if func in (cmd_push, cmd_pull):
             sub.add_argument(
                 "--dry-run", action="store_true", help="report what would change, change nothing"
+            )
+            sub.add_argument(
+                "--capture",
+                type=Path,
+                default=None,
+                help="write each response body into this directory, so a metered "
+                "call's output survives the CI log that printed it",
             )
         if func is cmd_push:
             sub.add_argument(

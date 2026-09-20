@@ -22,10 +22,31 @@ class SyncResult:
     target: str
     status: str  # "updated" | "unchanged" | "skipped" | "unconfigured" | "would-update"
     detail: str = ""
+    #: What Onshape sent back, for a call that sent something. Kept off the
+    #: printed line -- it is for inspection, not for reading in a log -- but
+    #: kept, because a write response is the only thing the caller cannot get
+    #: again for free.
+    response: dict | None = None
 
     def __str__(self) -> str:
         line = f"[{self.status:>13}] {self.project} {self.action} {self.target}"
-        return f"{line} ({self.detail})" if self.detail else line
+        extra = ", ".join(filter(None, (self.detail, response_shape(self.response))))
+        return f"{line} ({extra})" if extra else line
+
+
+def response_shape(response: dict | None) -> str:
+    """The keys a write came back with, minus the echo of what we sent.
+
+    A Feature Studio write is the one place a compile complaint could surface,
+    and nothing this project has read says what such a response is called.
+    Rather than guess a field name and silently find nothing, print the names
+    that actually arrived: one run then settles it. `contents` is dropped
+    because it is our own source handed back.
+    """
+    if not response:
+        return ""
+    names = sorted(key for key in response if key != "contents")
+    return "returned: " + ", ".join(names) if names else ""
 
 
 def _unconfigured(project: ProjectConfig, action: str) -> list[SyncResult]:
@@ -96,10 +117,15 @@ def push_feature_studios(
             )
             continue
 
-        client.update_feature_studio_contents(project.ref(sync.element_id), local)
+        response = client.update_feature_studio_contents(project.ref(sync.element_id), local)
         results.append(
             SyncResult(
-                project.name, "push", target, "updated", "not compared" if assume_changed else ""
+                project.name,
+                "push",
+                target,
+                "updated",
+                "not compared" if assume_changed else "",
+                response=response if isinstance(response, dict) else None,
             )
         )
     return results
