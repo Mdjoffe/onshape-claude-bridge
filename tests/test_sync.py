@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from onshape_bridge.config import load_project
-from onshape_bridge.sync import pull_exports, push_feature_studios
+from onshape_bridge.sync import pull_exports, push_feature_studios, response_shape
 
 CONFIG = """
 project: dock
@@ -20,13 +20,14 @@ class FakeClient:
     def __init__(self, remote_contents=""):
         self.remote_contents = remote_contents
         self.updates: list[tuple[str, str]] = []
+        self.update_response: dict = {}
 
     def get_feature_studio_contents(self, ref):
         return self.remote_contents
 
     def update_feature_studio_contents(self, ref, contents):
         self.updates.append((ref.element_id, contents))
-        return {}
+        return self.update_response
 
 
 def make_project(tmp_path: Path, source: str | None = "FeatureScript 1234;\n"):
@@ -206,3 +207,47 @@ def test_assume_changed_dry_run_writes_nothing(tmp_path):
     assert [r.status for r in results] == ["would-update"]
     assert client.updates == []
     assert client.reads == 0
+
+
+def test_push_keeps_what_onshape_returned(tmp_path):
+    """A write response is the one thing a caller cannot fetch again for free."""
+    project = make_project(tmp_path)
+    client = FakeClient(remote_contents="stale")
+    client.update_response = {"contents": "...", "notices": [{"message": "undefined variable"}]}
+
+    results = push_feature_studios(client, project)
+
+    assert results[0].response == client.update_response
+
+
+def test_response_shape_names_the_keys_that_arrived():
+    """We do not know what a compile complaint is called, so print what came."""
+    assert response_shape({"contents": "x", "notices": [], "libraryVersion": 2}) == (
+        "returned: libraryVersion, notices"
+    )
+
+
+def test_response_shape_drops_our_own_source_echoed_back():
+    assert response_shape({"contents": "FeatureScript 1234;"}) == ""
+
+
+def test_response_shape_says_nothing_when_there_was_no_write():
+    assert response_shape(None) == ""
+    assert response_shape({}) == ""
+
+
+def test_a_result_line_shows_the_returned_keys(tmp_path):
+    project = make_project(tmp_path)
+    client = FakeClient(remote_contents="stale")
+    client.update_response = {"notices": []}
+
+    line = str(push_feature_studios(client, project)[0])
+
+    assert "returned: notices" in line
+
+
+def test_a_result_line_is_unchanged_when_nothing_came_back(tmp_path):
+    project = make_project(tmp_path)
+    client = FakeClient(remote_contents="stale")
+
+    assert str(push_feature_studios(client, project)[0]).endswith("featurescript/dock.fs")

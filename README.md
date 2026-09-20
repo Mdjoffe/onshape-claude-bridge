@@ -44,8 +44,8 @@ the keys are wrong, revoked, or missing scopes, and it says so.
 | `doctor` | Verify the key pair against the live API |
 | `validate <path>` | Parse `onshape.yml` files, no network |
 | `elements <path>` | List a document's tabs and their element ids |
-| `push <path> [--dry-run]` | Upload FeatureScript from git into Onshape |
-| `pull <path> [--dry-run]` | Download configured exports into the repo |
+| `push <path> [--dry-run] [--capture DIR]` | Upload FeatureScript from git into Onshape |
+| `pull <path> [--dry-run] [--capture DIR]` | Download configured exports into the repo |
 
 `<path>` accepts a single `onshape.yml`, a project directory, or a tree to walk.
 `elements` exists because element ids are the tedious part of writing a config —
@@ -80,6 +80,15 @@ retries once, or raises if that wait is longer than `max_retry_after`.
 1 call per file instead of 2. Use it when git already established the file
 changed -- a manual sync you triggered because you edited something. The cost of
 being wrong is one needless Onshape microversion.
+
+`--capture DIR` writes each write-response to a file. A metered call spends
+part of a yearly allowance and its response cannot be had again for free, so
+printing it to a CI log is not keeping it -- logs expire. The result line also
+names the keys the response arrived with, minus `contents`, which is only the
+source handed back. That matters most for a Feature Studio write: it is the one
+place a compile complaint could surface, and nothing in Onshape's guides says
+what such a field is called, so the run reports what actually came rather than
+hunting for a name we guessed.
 
 Export polling backs off (2s, 4s, 8s ... capped at 30s) rather than hammering a
 flat interval, which takes a five-minute export from about 150 calls to a dozen.

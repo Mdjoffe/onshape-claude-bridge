@@ -1,0 +1,41 @@
+name: Checks
+
+# The content repo installs this package from main on every sync run, so main
+# being broken breaks a run that costs metered Onshape calls to retry. Nothing
+# here touches the network or spends a call: the whole suite runs against fake
+# clients.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is what the content repo's workflows pin; 3.12 catches what
+        # would break if a runner image moved under us.
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          set -euo pipefail
+          pip install --quiet .
+          pip install --quiet pytest
+
+      - name: Tests
+        run: python -m pytest tests -q
+
+      # Installing is not the same as being importable under the console entry
+      # point, and that is exactly how the content repo invokes this.
+      - name: The CLI runs from an install
+        run: onshape-bridge --help > /dev/null && echo 'onshape-bridge is on PATH'
